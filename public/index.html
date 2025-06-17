@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Thermocouple Dashboard</title>
+		<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+		<style>
+			/* Typography optimizations */
+			* {
+				-webkit-font-smoothing: antialiased;
+				text-rendering: optimizeLegibility;
+				-webkit-text-size-adjust: 100%;
+			}
+
+			/* Core font styles - only 3 variations */
+			.text-large {
+				font-size: 2rem;
+				font-weight: 600;
+				line-height: 1.2;
+			}
+
+			.text-medium {
+				font-size: 1rem;
+				font-weight: 500;
+				line-height: 1.4;
+			}
+
+			.text-small {
+				font-size: 0.875rem;
+				font-weight: 400;
+				line-height: 1.4;
+			}
+
+			/* Custom animations */
+			@keyframes pulse-custom {
+
+				0%,
+				100% {
+					opacity: 1;
+					transform: scale(1);
+				}
+
+				50% {
+					opacity: 0.5;
+					transform: scale(0.75);
+				}
+			}
+
+			.loading-pulse {
+				animation: pulse-custom 1.5s infinite ease-in-out;
+			}
+
+			/* Interactive elements - minimal hover */
+			.card-hover {
+				transition: border-color 0.15s ease-out;
+			}
+
+			@media (hover: hover) {
+				.card-hover:hover {
+					border-color: #000;
+				}
+			}
+
+			/* Disable iOS tap highlight */
+			* {
+				-webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+			}
+
+			/* Custom focus states using border */
+			.focus-ring:focus {
+				outline: none;
+				border-color: #000;
+			}
+
+			/* Tabular numbers for consistent width */
+			.tabular-nums {
+				font-variant-numeric: tabular-nums;
+			}
+
+			/* Line clamp utility for multiline text truncation */
+			.line-clamp-1 {
+				display: -webkit-box;
+				line-clamp: 1;
+				-webkit-line-clamp: 1;
+				-webkit-box-orient: vertical;
+			}
+		</style>
+	</head>
+
+	<body class="font-mono bg-white text-black leading-relaxed min-h-screen select-none">
+		<div class="container mx-auto px-4 max-w-6xl py-8 my-auto">
+			<div class="main-content">
+				<div class="text-center mb-8">
+					<h2 class="text-large text-gray-800 mb-4">Live Temperatures</h2>
+					<div id="status-indicator"
+						class="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 text-small text-gray-600">
+						<span class="loading-pulse inline-block w-2 h-2 bg-black rounded-full"></span>
+						<span>Loading data...</span>
+					</div>
+				</div>
+
+				<div id="thermocouple-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+					<!-- Thermocouple cards will be injected here by JavaScript -->
+				</div>
+
+				<div id="error-message" class="mt-8 p-4 border border-gray-400 text-small hidden">
+					<div class="flex items-start gap-3">
+						<span class="text-medium">×</span>
+						<div>
+							<h3 class="text-medium">Connection Error</h3>
+							<p class="text-small mt-1"><span id="error-text"></span></p>
+							<p class="text-small mt-1">Could not fetch thermocouple data. Please check the server and try again.</p>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<script>
+			const grid = document.getElementById('thermocouple-grid');
+			const statusIndicator = document.getElementById('status-indicator');
+			const errorMessageDiv = document.getElementById('error-message');
+			const errorTextSpan = document.getElementById('error-text');
+
+			function createThermocoupleCard(boardId, channel) {
+				const card = document.createElement('div');
+				card.className = 'card-hover bg-white border border-gray-300 p-4 focus-ring h-48';
+				card.setAttribute('tabindex', '0');
+
+				let tempDisplay = 'N/A';
+				let statusText = 'Disconnected';
+				let statusIndicator = '○'; // Empty circle
+
+				if (typeof channel.temperature === 'number') {
+					tempDisplay = channel.temperature.toFixed(1);
+					statusText = 'Connected';
+					statusIndicator = '●'; // Filled circle
+				} else if (typeof channel.temperature === 'string') {
+					tempDisplay = channel.temperature;
+					statusText = channel.temperature.charAt(0).toUpperCase() + channel.temperature.slice(1);
+					statusIndicator = '△'; // Triangle
+				}
+
+				card.innerHTML = `
+					<div class="flex items-start justify-between mb-3 h-12">
+						<div class="flex-1 min-w-0 pr-2">
+							<div class="text-medium leading-tight line-clamp-1 overflow-hidden">${channel.name || `Channel ${channel.id}`}</div>
+							<div class="text-small text-gray-600 mt-1">Board ${boardId} • Ch ${channel.id}</div>
+						</div>
+						<span class="text-medium flex-shrink-0">${statusIndicator}</span>
+					</div>
+					
+					<div class="text-center mb-4">
+						<div class="tabular-nums text-large">
+							${tempDisplay}${typeof channel.temperature === 'number' ? '°C' : ''}
+						</div>
+					</div>
+
+					<div class="space-y-2">
+						<div class="flex justify-between border-t border-gray-200 pt-2">
+							<span class="text-small text-gray-600">Type</span>
+							<span class="text-small">${channel.type || 'N/A'}</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-small text-gray-600">Status</span>
+							<span class="text-small">${statusText}</span>
+						</div>
+					</div>
+				`;
+				return card;
+			}
+
+			function updateStatusIndicator(message, type = 'loading') {
+				const indicators = {
+					loading: '<span class="loading-pulse inline-block w-2 h-2 bg-black rounded-full"></span>',
+					success: '<span class="inline-block w-2 h-2 bg-black rounded-full"></span>',
+					error: '<span class="inline-block w-2 h-2 bg-black rounded-full"></span>'
+				};
+
+				statusIndicator.innerHTML = `
+					${indicators[type]}
+					<span>${message}</span>
+				`;
+			}
+
+			async function fetchTemperatures() {
+				updateStatusIndicator('Fetching data...', 'loading');
+				errorMessageDiv.classList.add('hidden');
+
+				try {
+					const response = await fetch('/api/readings');
+					if (!response.ok) {
+						const errorData = await response.text();
+						throw new Error(`HTTP error ${response.status}: ${errorData || response.statusText}`);
+					}
+					const data = await response.json();
+
+					grid.innerHTML = '';
+
+					if (data.readings && data.readings.length > 0) {
+						let channelsFound = false;
+						data.readings.forEach(boardData => {
+							if (boardData.channels && boardData.channels.length > 0) {
+								channelsFound = true;
+								boardData.channels.forEach((channelData, index) => {
+									setTimeout(() => {
+										const card = createThermocoupleCard(boardData.board, channelData);
+										grid.appendChild(card);
+									}, index * 50);
+								});
+							}
+						});
+						if (!channelsFound) {
+							grid.innerHTML = `
+								<div class="col-span-full text-center py-8 border border-gray-300">
+									<div class="text-large mb-2">—</div>
+									<h3 class="text-medium mb-2">No Active Channels</h3>
+									<p class="text-small text-gray-600">Ensure devices are connected and reporting.</p>
+								</div>
+							`;
+						}
+					} else {
+						grid.innerHTML = `
+							<div class="col-span-full text-center py-8 border border-gray-300">
+								<div class="text-large mb-2">—</div>
+								<h3 class="text-medium mb-2">No Boards Detected</h3>
+								<p class="text-small text-gray-600">No thermocouple boards detected or no data available.</p>
+							</div>
+						`;
+					}
+					updateStatusIndicator(`Updated: ${new Date().toLocaleTimeString()}`, 'success');
+				} catch (error) {
+					console.error("Failed to fetch temperatures:", error);
+					grid.innerHTML = `
+						<div class="col-span-full text-center py-8 border border-gray-400">
+							<div class="text-large mb-2">×</div>
+							<h3 class="text-medium mb-2">Connection Error</h3>
+							<p class="text-small">Failed to load data. Check console for details.</p>
+						</div>
+					`;
+					errorTextSpan.textContent = error.message;
+					errorMessageDiv.classList.remove('hidden');
+					updateStatusIndicator('Error fetching data', 'error');
+				}
+			}
+
+			fetchTemperatures();
+			setInterval(fetchTemperatures, 5000);
+		</script>
+	</body>
+
+</html>

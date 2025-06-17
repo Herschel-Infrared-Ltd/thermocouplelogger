@@ -4,6 +4,7 @@
   "type": "module",
   "devDependencies": {
     "@types/bun": "latest",
+    "cross-env": "^7.0.3",
     "tsx": "^4.20.3"
   },
   "scripts": {
@@ -11,8 +12,8 @@
     "dev": "tsx watch index.ts",
     "server": "tsx server.ts",
     "dev-server": "tsx watch server.ts",
-    "server:silent": "SILENT=true tsx server.ts",
-    "start:silent": "SILENT=true tsx main.ts",
+    "server:silent": "cross-env SILENT=true tsx server.ts",
+    "start:silent": "cross-env SILENT=true tsx main.ts",
     "setup": "tsx -e \"import { setupConfig } from './config.js'; setupConfig().then(() => console.log('Setup complete!'))\""
   },
   "peerDependencies": {

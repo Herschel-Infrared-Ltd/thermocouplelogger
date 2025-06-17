@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import client from "prom-client";
 import { channelData, config, channelMap } from "./index";
+import { logger } from "./logger";
 
 /** Hono web application instance */
 const app = new Hono();
@@ -80,7 +81,7 @@ function isChannelConnected(lastUpdate: Date): boolean {
  * Returns an array of thermocouple readings with temperature, connection status, and metadata
  */
 app.get("/api/readings", async (c) => {
-  console.log("[GET] /api/readings");
+  logger.log("[GET] /api/readings");
   try {
     const readings = [];
 
@@ -125,7 +126,7 @@ app.get("/api/readings", async (c) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
-    console.log("[GET] /api/readings - Response: 500", err.message);
+    logger.log("[GET] /api/readings - Response: 500", err.message);
     c.status(500);
     return c.json({ error: err.message || "Unknown error" });
   }
@@ -138,7 +139,7 @@ app.get("/api/readings", async (c) => {
  */
 app.get("/api/readings/:name", async (c) => {
   const { name } = c.req.param();
-  console.log(`[GET] /api/readings/${name}`);
+  logger.log(`[GET] /api/readings/${name}`);
 
   // Find thermocouple by name
   const tc = config.thermocouples.find((t) => t.name === name);
@@ -180,7 +181,7 @@ app.get("/api/readings/:name", async (c) => {
  * Includes temperature, connection status, configuration info, and data age metrics
  */
 app.get("/metrics", async (c) => {
-  console.log("[GET] /metrics");
+  logger.log("[GET] /metrics");
   try {
     // Reset all metrics
     channelTemperatureGauge.reset();
@@ -248,7 +249,7 @@ app.get("/metrics", async (c) => {
     c.header("Content-Type", "text/plain; version=0.0.4");
     return c.text(metrics);
   } catch (err: any) {
-    console.log("[GET] /metrics - Error:", err.message);
+    logger.log("[GET] /metrics - Error:", err.message);
     c.status(500);
     return c.text(`# Error: ${err.message || "Unknown error"}`);
   }
@@ -292,11 +293,11 @@ app.get("/api/config", async (c) => {
 /** Server configuration and export */
 const port = 3000;
 
-console.log("Thermocouple web server will listen on port 3000");
+logger.log("Thermocouple web server will listen on port 3000");
 
 serve({
   fetch: app.fetch,
   port,
 });
 
-console.log(`Server is running on http://localhost:${port}`);
+logger.log(`Server is running on http://localhost:${port}`);

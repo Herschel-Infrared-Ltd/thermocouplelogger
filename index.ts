@@ -1,6 +1,7 @@
 import { SerialPort } from "serialport";
 import { loadConfig } from "./config";
 import type { AppConfig, ThermocoupleConfig } from "./config";
+import { logger } from "./logger";
 
 /** Serial port instance connected to the thermocouple data logger */
 let port: SerialPort;
@@ -58,10 +59,10 @@ export const channelMap: { [key: string]: number } = {
 function initializeApp() {
   try {
     config = loadConfig();
-    console.log(
+    logger.log(
       `Loaded config with ${config.thermocouples.length} thermocouples`
     );
-    console.log(
+    logger.log(
       `Serial port: ${config.serial.path} @ ${config.serial.baudRate} baud`
     );
 
@@ -89,16 +90,16 @@ function initializeApp() {
       // Set up serial port event handlers
       setupSerialPortHandlers();
     } catch (serialError: any) {
-      console.warn(
+      logger.warn(
         "Serial port connection failed (running in demo mode):",
         serialError.message
       );
-      console.log(
+      logger.log(
         "The application will continue to run for API/web interface testing"
       );
     }
   } catch (error) {
-    console.error("Failed to initialize app:", error);
+    logger.error("Failed to initialize app:", error);
     process.exit(1);
   }
 }
@@ -108,7 +109,7 @@ function initializeApp() {
  */
 function setupSerialPortHandlers() {
   if (!port) {
-    console.warn("Cannot setup handlers: Serial port not initialized");
+    logger.warn("Cannot setup handlers: Serial port not initialized");
     return;
   }
 
@@ -136,18 +137,18 @@ function setupSerialPortHandlers() {
 
   /** Serial port error event handler */
   port.on("error", (err) => {
-    console.error("Serial port error:", err);
+    logger.error("Serial port error:", err);
   });
 
   /** Serial port open event handler */
   port.on("open", () => {
-    console.log("Serial port opened successfully");
-    console.log("Monitoring thermocouple data logger...\n");
+    logger.log("Serial port opened successfully");
+    logger.log("Monitoring thermocouple data logger...\n");
   });
 
   /** Serial port close event handler */
   port.on("close", () => {
-    console.log("Serial port closed");
+    logger.log("Serial port closed");
   });
 }
 
@@ -167,7 +168,7 @@ function parseThermocoupleData(message: string) {
     const channelNum = channelMap[channelHex.toUpperCase()];
 
     if (!channelNum) {
-      console.log("Unknown channel:", channelHex);
+      logger.log("Unknown channel:", channelHex);
       return;
     }
 
@@ -190,7 +191,7 @@ function parseThermocoupleData(message: string) {
     channelData[channelKey].lastUpdate = new Date();
 
     const thermocoupleConfig = channelData[channelKey].config;
-    console.log(
+    logger.log(
       `${thermocoupleConfig.name} (Ch${channelNum}, Type ${
         thermocoupleConfig.type
       }): ${temperature.toFixed(1)}°C`
@@ -209,7 +210,7 @@ function parseThermocoupleData(message: string) {
  * Shows current temperature, channel info, and data age for each configured channel
  */
 function showChannelSummary() {
-  console.log("\n=== Temperature Summary ===");
+  logger.log("\n=== Temperature Summary ===");
   for (const tc of config.thermocouples) {
     const channelHex = Object.keys(channelMap).find(
       (key) => channelMap[key] === tc.channel
@@ -219,7 +220,7 @@ function showChannelSummary() {
       const age = (Date.now() - data.lastUpdate.getTime()) / 1000;
       const hasData = data.lastUpdate.getTime() > 0;
       if (hasData) {
-        console.log(
+        logger.log(
           `${tc.name.padEnd(20)} (Ch${tc.channel
             .toString()
             .padStart(2, " ")}, ${tc.type}): ${data.temperature.toFixed(
@@ -227,21 +228,21 @@ function showChannelSummary() {
           )}°C (${age.toFixed(1)}s ago)`
         );
       } else {
-        console.log(
+        logger.log(
           `${tc.name.padEnd(20)} (Ch${tc.channel
             .toString()
             .padStart(2, " ")}, ${tc.type}): --.-°C (no data)`
         );
       }
     } else {
-      console.log(
+      logger.log(
         `${tc.name.padEnd(20)} (Ch${tc.channel.toString().padStart(2, " ")}, ${
           tc.type
         }): --.-°C (not connected)`
       );
     }
   }
-  console.log("===========================\n");
+  logger.log("===========================\n");
 }
 
 /** Timer to show channel summary every 30 seconds */

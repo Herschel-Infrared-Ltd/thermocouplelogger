@@ -11,6 +11,8 @@
     "dev": "tsx watch index.ts",
     "server": "tsx server.ts",
     "dev-server": "tsx watch server.ts",
+    "server:silent": "SILENT=true tsx server.ts",
+    "start:silent": "SILENT=true tsx main.ts",
     "setup": "tsx -e \"import { setupConfig } from './config.js'; setupConfig().then(() => console.log('Setup complete!'))\""
   },
   "peerDependencies": {

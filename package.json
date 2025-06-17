@@ -10,7 +10,8 @@
     "start": "tsx index.ts",
     "dev": "tsx watch index.ts",
     "server": "tsx server.ts",
-    "dev-server": "tsx watch server.ts"
+    "dev-server": "tsx watch server.ts",
+    "setup": "tsx -e \"import { setupConfig } from './config.js'; setupConfig().then(() => console.log('Setup complete!'))\""
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

@@ -65,15 +65,6 @@ function initializeApp() {
       `Serial port: ${config.serial.path} @ ${config.serial.baudRate} baud`
     );
 
-    // Initialize serial port with config values
-    port = new SerialPort({
-      path: config.serial.path,
-      baudRate: config.serial.baudRate,
-    });
-
-    // Set up serial port event handlers
-    setupSerialPortHandlers();
-
     // Initialize channel data for configured thermocouples
     for (const tc of config.thermocouples) {
       const channelHex = Object.keys(channelMap).find(
@@ -87,6 +78,25 @@ function initializeApp() {
         };
       }
     }
+
+    // Try to initialize serial port with config values
+    try {
+      port = new SerialPort({
+        path: config.serial.path,
+        baudRate: config.serial.baudRate,
+      });
+
+      // Set up serial port event handlers
+      setupSerialPortHandlers();
+    } catch (serialError: any) {
+      console.warn(
+        "Serial port connection failed (running in demo mode):",
+        serialError.message
+      );
+      console.log(
+        "The application will continue to run for API/web interface testing"
+      );
+    }
   } catch (error) {
     console.error("Failed to initialize app:", error);
     process.exit(1);
@@ -97,6 +107,11 @@ function initializeApp() {
  * Set up serial port event handlers
  */
 function setupSerialPortHandlers() {
+  if (!port) {
+    console.warn("Cannot setup handlers: Serial port not initialized");
+    return;
+  }
+
   /**
    * Serial port data event handler
    * Accumulates incoming data in a buffer and processes complete messages

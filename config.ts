@@ -1,11 +1,9 @@
 import { existsSync, writeFileSync, readFileSync } from "fs";
 import { exec } from "child_process";
 import { promisify } from "util";
+import * as readline from "readline";
 
 const execAsync = promisify(exec);
-
-// Add readline for user input
-const readline = require("readline");
 
 /**
  * Configuration interface for serial port connection

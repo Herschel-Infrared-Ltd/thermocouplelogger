@@ -128,7 +128,38 @@
 				const card = document.createElement('div');
 				card.className = 'card-hover bg-white border border-gray-300 p-4 focus-ring h-48';
 				card.setAttribute('tabindex', '0');
+				card.setAttribute('data-channel-id', reading.id);
 
+				card.innerHTML = `
+					<div class="flex items-start justify-between mb-3 h-12">
+						<div class="flex-1 min-w-0 pr-2">
+							<div class="channel-name text-medium leading-tight line-clamp-1 overflow-hidden"></div>
+							<div class="channel-info text-small text-gray-600 mt-1"></div>
+						</div>
+						<span class="status-indicator text-medium flex-shrink-0"></span>
+					</div>
+					
+					<div class="text-center mb-4">
+						<div class="temperature-display tabular-nums text-large"></div>
+					</div>
+
+					<div class="space-y-2">
+						<div class="flex justify-between border-t border-gray-200 pt-2">
+							<span class="text-small text-gray-600">Type</span>
+							<span class="channel-type text-small"></span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-small text-gray-600">Status</span>
+							<span class="channel-status text-small"></span>
+						</div>
+					</div>
+				`;
+
+				updateThermocoupleCard(card, reading);
+				return card;
+			}
+
+			function updateThermocoupleCard(card, reading) {
 				let tempDisplay = 'N/A';
 				let statusText = 'Disconnected';
 				let statusIndicator = '○'; // Empty circle
@@ -142,33 +173,14 @@
 					statusIndicator = '○'; // Empty circle
 				}
 
-				card.innerHTML = `
-					<div class="flex items-start justify-between mb-3 h-12">
-						<div class="flex-1 min-w-0 pr-2">
-							<div class="text-medium leading-tight line-clamp-1 overflow-hidden">${reading.name || `Channel ${reading.id}`}</div>
-							<div class="text-small text-gray-600 mt-1">Ch ${reading.id}</div>
-						</div>
-						<span class="text-medium flex-shrink-0">${statusIndicator}</span>
-					</div>
-					
-					<div class="text-center mb-4">
-						<div class="tabular-nums text-large">
-							${tempDisplay}${reading.connected && typeof reading.temperature === 'number' ? '°C' : ''}
-						</div>
-					</div>
-
-					<div class="space-y-2">
-						<div class="flex justify-between border-t border-gray-200 pt-2">
-							<span class="text-small text-gray-600">Type</span>
-							<span class="text-small">${reading.type || 'N/A'}</span>
-						</div>
-						<div class="flex justify-between">
-							<span class="text-small text-gray-600">Status</span>
-							<span class="text-small">${statusText}</span>
-						</div>
-					</div>
-				`;
-				return card;
+				// Update card content
+				card.querySelector('.channel-name').textContent = reading.name || `Channel ${reading.id}`;
+				card.querySelector('.channel-info').textContent = `Ch ${reading.id}`;
+				card.querySelector('.status-indicator').textContent = statusIndicator;
+				card.querySelector('.temperature-display').textContent =
+					`${tempDisplay}${reading.connected && typeof reading.temperature === 'number' ? '°C' : ''}`;
+				card.querySelector('.channel-type').textContent = reading.type || 'N/A';
+				card.querySelector('.channel-status').textContent = statusText;
 			}
 
 			function updateStatusIndicator(message, type = 'loading') {
@@ -196,16 +208,48 @@
 					}
 					const data = await response.json();
 
-					grid.innerHTML = '';
-
 					if (data.readings && data.readings.length > 0) {
+						// Get existing cards by channel ID
+						const existingCards = new Map();
+						grid.querySelectorAll('[data-channel-id]').forEach(card => {
+							const channelId = parseInt(card.getAttribute('data-channel-id'));
+							existingCards.set(channelId, card);
+						});
+
+						// Remove any placeholder message
+						const placeholder = grid.querySelector('.col-span-full');
+						if (placeholder) {
+							placeholder.remove();
+						}
+
+						// Track which channels we've processed
+						const processedChannels = new Set();
+
+						// Update or create cards for each reading
 						data.readings.forEach((reading, index) => {
-							setTimeout(() => {
-								const card = createThermocoupleCard(reading);
-								grid.appendChild(card);
-							}, index * 50);
+							processedChannels.add(reading.id);
+
+							if (existingCards.has(reading.id)) {
+								// Update existing card
+								const existingCard = existingCards.get(reading.id);
+								updateThermocoupleCard(existingCard, reading);
+							} else {
+								// Create new card with staggered animation
+								setTimeout(() => {
+									const card = createThermocoupleCard(reading);
+									grid.appendChild(card);
+								}, index * 50);
+							}
+						});
+
+						// Remove cards for channels that are no longer in the data
+						existingCards.forEach((card, channelId) => {
+							if (!processedChannels.has(channelId)) {
+								card.remove();
+							}
 						});
 					} else {
+						// Clear all cards and show placeholder
 						grid.innerHTML = `
 							<div class="col-span-full text-center py-8 border border-gray-300">
 								<div class="text-large mb-2">—</div>

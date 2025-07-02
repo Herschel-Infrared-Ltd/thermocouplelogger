@@ -8,20 +8,15 @@
     "tsx": "^4.20.3"
   },
   "scripts": {
+    "setup": "tsx config.ts",
     "start": "tsx index.ts",
-    "dev": "tsx watch index.ts",
-    "server": "tsx server.ts",
-    "dev-server": "tsx watch server.ts",
-    "server:silent": "cross-env SILENT=true tsx server.ts",
-    "start:silent": "cross-env SILENT=true tsx main.ts",
-    "setup": "tsx -e \"import { setupConfig } from './config.js'; setupConfig().then(() => console.log('Setup complete!'))\""
+    "start:silent": "cross-env SILENT=true tsx index.ts"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",
-    "@serialport/list": "^13.0.0",
     "hono": "^4.7.11",
     "prom-client": "^15.1.3",
     "serialport": "^13.0.0"

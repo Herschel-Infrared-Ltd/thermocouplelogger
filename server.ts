@@ -77,52 +77,44 @@ function isChannelConnected(lastUpdate: Date): boolean {
 // API Routes
 
 /**
- * GET /api/readings - Get current readings for all configured thermocouples
- * Returns an array of thermocouple readings with temperature, connection status, and metadata
+ * GET /api/readings - Get current readings for all active thermocouple channels
+ * Returns an array of thermocouple readings including both configured and auto-detected channels
  */
 app.get("/api/readings", async (c) => {
   logger.log("[GET] /api/readings");
   try {
     const readings = [];
 
-    // Go through all configured thermocouples
-    for (const tc of config.thermocouples) {
-      // Find the corresponding hex key for this channel
-      const channelHex = Object.keys(channelMap).find(
-        (key) => channelMap[key] === tc.channel
-      );
+    // Go through all active channels (both configured and auto-detected)
+    for (const [channelHex, data] of Object.entries(channelData)) {
+      const channelNum = getChannelNumber(channelHex);
+      const connected = isChannelConnected(data.lastUpdate);
+      const age = (Date.now() - data.lastUpdate.getTime()) / 1000;
 
-      if (channelHex && channelData[channelHex]) {
-        const data = channelData[channelHex];
-        const connected = isChannelConnected(data.lastUpdate);
-        const age = (Date.now() - data.lastUpdate.getTime()) / 1000;
-
-        readings.push({
-          id: tc.channel,
-          name: tc.name,
-          type: tc.type,
-          temperature: connected ? data.temperature : null,
-          connected: connected,
-          lastUpdate: data.lastUpdate.toISOString(),
-          ageSeconds: age,
-        });
-      } else {
-        // Channel is configured but no data received
-        readings.push({
-          id: tc.channel,
-          name: tc.name,
-          type: tc.type,
-          temperature: null,
-          connected: false,
-          lastUpdate: null,
-          ageSeconds: null,
-        });
-      }
+      readings.push({
+        id: channelNum,
+        name: data.config.name,
+        type: data.config.type,
+        temperature: connected ? data.temperature : null,
+        connected: connected,
+        lastUpdate: data.lastUpdate.toISOString(),
+        ageSeconds: age,
+        // New detection metadata
+        detected: data.detected,
+        firstSeen: data.firstSeen.toISOString(),
+        dataCount: data.dataCount,
+        channel: channelNum,
+      });
     }
+
+    // Sort by channel number for consistent ordering
+    readings.sort((a, b) => a.channel - b.channel);
 
     return c.json({
       readings,
+      totalActive: readings.length,
       totalConfigured: config.thermocouples.length,
+      totalDetected: readings.filter(r => r.detected).length,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {

@@ -5,10 +5,12 @@ A Node.js application for reading and monitoring temperature data from the [HH-4
 ## Features
 
 - **Real-time serial data monitoring** - Continuously reads thermocouple data from HH-4208SD via RS-232
+- **Live console dashboard** - Dynamic terminal table that updates in place without scrolling
 - **Web dashboard** - Clean, modern web interface for viewing live temperature readings
+- **Auto-detection** - Automatically discovers and configures channels from incoming data
 - **REST API** - RESTful endpoints for programmatic access to temperature data
 - **Prometheus metrics** - Built-in metrics endpoint for monitoring and alerting
-- **Multi-channel support** - Configurable support for up to 12 thermocouple channels
+- **Multi-channel support** - Support for up to 12 thermocouple channels with auto-detection
 - **Multiple thermocouple types** - Supports K, J, T, E, R, S type thermocouples
 - **Connection monitoring** - Tracks data freshness and connection status
 
@@ -26,9 +28,10 @@ thermocouplelogger/
 ├── package.json          # Dependencies and scripts
 ├── tsconfig.json         # TypeScript configuration
 ├── config.ts            # Configuration management and setup
-├── index.ts             # Serial data monitoring (main logic)
-├── server.ts            # Web server and API endpoints
-├── main.ts              # Application entry point
+├── index.ts             # Main entry point (serial + web server)
+├── server.ts            # Web server and API endpoints  
+├── logger.ts            # Enhanced logging with dashboard mode
+├── parser.ts            # Shared data parsing and validation
 ├── public/
 │   └── index.html       # Web dashboard interface
 └── config.json          # Runtime configuration (auto-generated)
@@ -52,9 +55,12 @@ thermocouplelogger/
 
    - Scan for available serial ports
    - Guide you through selecting your HH-4208SD device
-   - Create a configuration file with your thermocouple channels
+   - Test data format and validate HH-4208SD configuration
+   - Create a configuration file for port settings
 
-3. **Configure your thermocouples** by editing the generated `config.json` file
+3. **Optional**: Customize thermocouple names by editing the generated `config.json` file
+
+   **Note**: The application auto-detects channels from live data, so configuration is optional!
 
 ## Configuration
 
@@ -94,21 +100,15 @@ Example configuration:
 npm start
 ```
 
-This starts both the serial monitoring and web server.
+This starts both serial monitoring and web server with a live console dashboard.
 
-### Development mode (with auto-restart)
+### Silent mode (suppress console output)
 
 ```bash
-npm run dev
+npm run start:silent
 ```
 
 ### Individual components
-
-**Serial monitoring only:**
-
-```bash
-npm run dev
-```
 
 **Web server only:**
 
@@ -116,22 +116,31 @@ npm run dev
 npm run server
 ```
 
-## Web Interface
+## User Interfaces
+
+### Console Dashboard
+
+The terminal displays a live-updating table showing:
+- Real-time temperature readings for all active channels
+- Connection status and data age for each thermocouple
+- Auto-detected channel information
+- Individual temperature events above the live table
+
+### Web Interface
 
 Access the web dashboard at: **<http://localhost:3000>**
 
-The dashboard displays:
-
-- Live temperature readings for all configured channels
+The web dashboard displays:
+- Live temperature readings for all detected and configured channels
 - Connection status for each thermocouple
-- Last update timestamps
+- Last update timestamps and detection metadata
 - Visual indicators for connected/disconnected channels
 
 ## API Endpoints
 
 ### GET `/api/readings`
 
-Returns current readings for all configured thermocouples
+Returns current readings for all active thermocouples (detected + configured)
 
 ```json
 {
@@ -146,7 +155,9 @@ Returns current readings for all configured thermocouples
       "ageSeconds": 2.1
     }
   ],
-  "totalConfigured": 2,
+  "totalActive": 2,
+  "totalDetected": 1,
+  "totalConfigured": 1,
   "timestamp": "2024-01-15T10:30:02.000Z"
 }
 ```

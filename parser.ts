@@ -200,3 +200,61 @@ export function processSerialBuffer(buffer: string, newData: string): {
     buffer: newBuffer
   };
 }
+
+/**
+ * Creates a default thermocouple name using the standard naming convention
+ * @param dataloggerNum - Datalogger number (1, 2, 3, etc.)
+ * @param channelNum - Channel number (1-12)
+ * @returns Formatted thermocouple name (e.g., "D1-T3")
+ */
+export function createThermocoupleDefaultName(dataloggerNum: number, channelNum: number): string {
+  return `D${dataloggerNum}-T${channelNum}`;
+}
+
+/**
+ * Creates a default datalogger name using the standard naming convention
+ * @param dataloggerNum - Datalogger number (1, 2, 3, etc.)
+ * @returns Formatted datalogger name (e.g., "Datalogger 1")
+ */
+export function createDataloggerDefaultName(dataloggerNum: number): string {
+  return `Datalogger ${dataloggerNum}`;
+}
+
+/**
+ * Extracts datalogger number from a datalogger name
+ * @param dataloggerName - Datalogger name (e.g., "Datalogger 1", "HH-4208SD Primary")
+ * @returns Datalogger number or "1" as fallback
+ */
+export function extractDataloggerNumber(dataloggerName: string): string {
+  const match = dataloggerName.match(/Datalogger (\d+)/);
+  return match ? match[1] : "1";
+}
+
+/**
+ * Creates a default datalogger configuration for auto-detection
+ * @param dataloggerNum - Datalogger number (1, 2, 3, etc.)
+ * @param serialPath - Serial port path
+ * @param channels - Array of discovered channels
+ * @returns Datalogger configuration object
+ */
+export function createDefaultDataloggerConfig(
+  dataloggerNum: number, 
+  serialPath: string, 
+  channels: { hex: string; number: number; temperature: number }[]
+) {
+  const thermocouples = channels.map(channel => ({
+    name: createThermocoupleDefaultName(dataloggerNum, channel.number),
+    type: "K",
+    channel: channel.number,
+  }));
+
+  return {
+    id: dataloggerNum === 1 ? "primary" : `datalogger${dataloggerNum}`,
+    name: createDataloggerDefaultName(dataloggerNum),
+    serial: {
+      path: serialPath,
+    },
+    thermocouples: thermocouples,
+    autoDetected: true
+  };
+}

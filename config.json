@@ -1,0 +1,43 @@
+{
+  "dataloggers": [
+    {
+      "id": "primary",
+      "name": "Datalogger 1",
+      "serial": {
+        "path": "/dev/tty.usbserial-A10M5SMX"
+      },
+      "thermocouples": [
+        {
+          "name": "D1-T1",
+          "type": "K",
+          "channel": 1
+        },
+        {
+          "name": "D1-T3",
+          "type": "K",
+          "channel": 3
+        },
+        {
+          "name": "D1-T4",
+          "type": "K",
+          "channel": 4
+        },
+        {
+          "name": "D1-T6",
+          "type": "K",
+          "channel": 6
+        },
+        {
+          "name": "D1-T7",
+          "type": "K",
+          "channel": 7
+        }
+      ],
+      "autoDetected": true
+    }
+  ],
+  "globalSettings": {
+    "connectionTimeout": 60,
+    "defaultThermocoupleType": "K"
+  }
+}

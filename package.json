@@ -10,14 +10,17 @@
   "scripts": {
     "setup": "tsx config.ts",
     "start": "tsx index.ts",
-    "start:silent": "cross-env SILENT=true tsx index.ts"
+    "server": "tsx index.ts",
+    "cli": "cross-env CLI_ONLY=true tsx index.ts"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",
+    "cli-table3": "^0.6.5",
     "hono": "^4.7.11",
+    "picocolors": "^1.1.1",
     "prom-client": "^15.1.3",
     "serialport": "^13.0.0"
   },

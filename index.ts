@@ -273,7 +273,10 @@ async function initializeApp() {
     }
 
     // Initialize serial connections for all active dataloggers in parallel
-    initializeDataloggers();
+    // Add a small delay to ensure ports are fully released after auto-detection
+    setTimeout(() => {
+      initializeDataloggers();
+    }, 1000);
   } catch (error) {
     console.error("Failed to initialize app:", error);
     process.exit(1);
@@ -316,6 +319,14 @@ function initializeDataloggers() {
           serialError.message
         }`
       );
+      
+      // Provide specific guidance for common errors
+      if (serialError.message.includes("Access denied")) {
+        setupLog(`${pc.yellow("Hint:")} Port may be in use. Try disconnecting and reconnecting the device.`);
+      } else if (serialError.message.includes("ENOENT")) {
+        setupLog(`${pc.yellow("Hint:")} Port not found. Check if device is connected.`);
+      }
+      
       failureCount++;
     }
   }
@@ -518,6 +529,7 @@ function showChannelSummary() {
       const age = (Date.now() - data.lastUpdate.getTime()) / 1000;
       const hasData = data.lastUpdate.getTime() > 0;
       const connected = age < 60 && hasData;
+      // Filter out channels with 0.0°C as they likely indicate no thermocouple connected
       return connected && data.temperature !== 0;
     });
 

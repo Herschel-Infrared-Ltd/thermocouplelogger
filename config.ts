@@ -216,7 +216,11 @@ async function testPortForDataQuick(
     function cleanup() {
       if (timeout) clearTimeout(timeout);
       if (port && port.isOpen) {
-        port.close();
+        try {
+          port.close();
+        } catch (closeError) {
+          // Ignore close errors - port might already be closed
+        }
       }
     }
     
@@ -367,7 +371,11 @@ async function testPortForData(
     function cleanup() {
       if (timeout) clearTimeout(timeout);
       if (port && port.isOpen) {
-        port.close();
+        try {
+          port.close();
+        } catch (closeError) {
+          // Ignore close errors - port might already be closed
+        }
       }
     }
 

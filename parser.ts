@@ -226,8 +226,26 @@ export function createDataloggerDefaultName(dataloggerNum: number): string {
  * @returns Datalogger number or "1" as fallback
  */
 export function extractDataloggerNumber(dataloggerName: string): string {
+  // Try to match "Datalogger X" format first
   const match = dataloggerName.match(/Datalogger (\d+)/);
-  return match ? match[1] : "1";
+  if (match) {
+    return match[1];
+  }
+  
+  // Try to match "D1", "D2", etc. format
+  const dMatch = dataloggerName.match(/D(\d+)/);
+  if (dMatch) {
+    return dMatch[1];
+  }
+  
+  // Try to extract any number from the name
+  const numMatch = dataloggerName.match(/(\d+)/);
+  if (numMatch) {
+    return numMatch[1];
+  }
+  
+  // Default fallback
+  return "1";
 }
 
 /**

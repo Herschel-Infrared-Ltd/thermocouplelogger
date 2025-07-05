@@ -99,7 +99,9 @@
 						<span class="loading-pulse inline-block w-2 h-2 bg-black rounded-full"></span>
 						<span>Loading data...</span>
 					</div>
-					<div id="datalogger-summary" class="mt-4 text-small text-gray-600"></div>
+					<div id="datalogger-summary" class="mt-4 text-small text-gray-600">
+						<span id="datalogger-count"></span> • <span id="channel-count"></span> • <span id="connected-count"></span>
+					</div>
 				</div>
 
 				<div id="thermocouple-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -124,6 +126,9 @@
 			const statusIndicator = document.getElementById('status-indicator');
 			const errorMessageDiv = document.getElementById('error-message');
 			const errorTextSpan = document.getElementById('error-text');
+			const dataloggerCount = document.getElementById('datalogger-count');
+			const channelCount = document.getElementById('channel-count');
+			const connectedCount = document.getElementById('connected-count');
 
 			function createThermocoupleCard(reading) {
 				const card = document.createElement('div');
@@ -175,8 +180,12 @@
 				}
 
 				// Update card content
-				card.querySelector('.channel-name').textContent = reading.name || `Channel ${reading.id}`;
-				card.querySelector('.channel-info').textContent = `Ch ${reading.id}`;
+				card.querySelector('.channel-name').textContent = reading.name || `Channel ${reading.channel}`;
+				// Show datalogger info in channel info if there are multiple dataloggers
+				const channelInfo = reading.dataloggerNumber && reading.dataloggerNumber !== '1' 
+					? `D${reading.dataloggerNumber}-Ch${reading.channel}` 
+					: `Ch ${reading.channel}`;
+				card.querySelector('.channel-info').textContent = channelInfo;
 				card.querySelector('.status-indicator').textContent = statusIndicator;
 				card.querySelector('.temperature-display').textContent =
 					`${tempDisplay}${reading.connected && typeof reading.temperature === 'number' ? '°C' : ''}`;
@@ -226,8 +235,21 @@
 						// Track which channels we've processed
 						const processedChannels = new Set();
 
-						// Update or create cards for each reading
-						data.readings.forEach((reading, index) => {
+						// Filter to only show truly connected channels (non-zero temperature)
+						const connectedReadings = data.readings.filter(r => r.connected && r.temperature !== 0);
+
+						if (connectedReadings.length === 0) {
+							// Show placeholder if no connected readings
+							grid.innerHTML = `
+								<div class="col-span-full text-center py-8 border border-gray-300">
+									<div class="text-large mb-2">—</div>
+									<h3 class="text-medium mb-2">No Connected Thermocouples</h3>
+									<p class="text-small text-gray-600">No thermocouples with active readings. Check connections and ensure thermocouples are properly attached.</p>
+								</div>
+							`;
+						} else {
+							// Update or create cards for each connected reading
+							connectedReadings.forEach((reading, index) => {
 							processedChannels.add(reading.id);
 
 							if (existingCards.has(reading.id)) {
@@ -241,24 +263,32 @@
 									grid.appendChild(card);
 								}, index * 50);
 							}
-						});
+													});
 
-						// Remove cards for channels that are no longer in the data
-						existingCards.forEach((card, channelId) => {
-							if (!processedChannels.has(channelId)) {
-								card.remove();
-							}
-						});
+							// Remove cards for channels that are no longer connected
+							existingCards.forEach((card, channelId) => {
+								if (!processedChannels.has(channelId)) {
+									card.remove();
+								}
+							});
+						}
 					} else {
-						// Clear all cards and show placeholder
+						// No data available at all
 						grid.innerHTML = `
 							<div class="col-span-full text-center py-8 border border-gray-300">
 								<div class="text-large mb-2">—</div>
-								<h3 class="text-medium mb-2">No Thermocouples Configured</h3>
-								<p class="text-small text-gray-600">No thermocouple channels configured or no data available.</p>
+								<h3 class="text-medium mb-2">No Data Available</h3>
+								<p class="text-small text-gray-600">No thermocouple data received. Check datalogger connection and configuration.</p>
 							</div>
 						`;
 					}
+					
+					// Update summary information
+					const trueConnectedReadings = data.readings.filter(r => r.connected && r.temperature !== 0);
+					dataloggerCount.textContent = `${data.totalDataloggers} datalogger${data.totalDataloggers !== 1 ? 's' : ''}`;
+					channelCount.textContent = `${data.totalActive} channel${data.totalActive !== 1 ? 's' : ''}`;
+					connectedCount.textContent = `${trueConnectedReadings.length} connected`;
+					
 					updateStatusIndicator(`Updated: ${new Date().toLocaleTimeString()}`, 'success');
 				} catch (error) {
 					console.error("Failed to fetch temperatures:", error);

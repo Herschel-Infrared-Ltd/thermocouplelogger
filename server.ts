@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import client from "prom-client";
 import { channelData, config, activeDataloggers, channelMap } from "./index";
+import { extractDataloggerNumber } from "./parser";
 import type { ThermocoupleConfig } from "./config";
 import pc from 'picocolors';
 import * as os from 'os';
@@ -114,9 +115,12 @@ app.get("/api/readings", async (c) => {
     const readings = [];
 
     // Go through all active channels (both configured and auto-detected)
-    for (const [channelHex, data] of Object.entries(channelData)) {
+    for (const [channelKey, data] of Object.entries(channelData)) {
+      // Extract hex from channel key (format: "dataloggerID:hex" or just "hex")
+      const parts = channelKey.split(":");
+      const channelHex = parts.length > 1 ? parts[1] : parts[0];
       const channelNum = getChannelNumber(channelHex);
-      const connected = isChannelConnected(data.lastUpdate);
+      const connected = isChannelConnected(data.lastUpdate) && data.temperature !== 0;
       const age = (Date.now() - data.lastUpdate.getTime()) / 1000;
 
       readings.push({
@@ -132,6 +136,8 @@ app.get("/api/readings", async (c) => {
         firstSeen: data.firstSeen.toISOString(),
         dataCount: data.dataCount,
         channel: channelNum,
+        datalogger: data.dataloggerName,
+        dataloggerNumber: extractDataloggerNumber(data.dataloggerName),
       });
     }
 

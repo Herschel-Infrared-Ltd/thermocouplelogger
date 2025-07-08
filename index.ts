@@ -1,11 +1,11 @@
 import { SerialPort } from "serialport";
-import { loadConfig } from "./config";
+import { loadConfig, autoDetectAndCreateConfig } from "./config";
 import type { AppConfig, DataloggerConfig, ThermocoupleConfig } from "./config";
+import { writeFileSync } from "fs";
 import CliTable3 from "cli-table3";
 import {
   processSerialBuffer,
   CHANNEL_MAP,
-  createDefaultDataloggerConfig,
   createThermocoupleDefaultName,
   extractDataloggerNumber,
 } from "./parser";
@@ -141,100 +141,61 @@ export const channelMap = CHANNEL_MAP;
  */
 async function initializeApp() {
   try {
-    // Load configuration
-    try {
-      config = loadConfig();
+    // Load configuration (read-only)
+    const loadedConfig = loadConfig();
+    
+    if (loadedConfig) {
+      // Use existing config
+      config = loadedConfig;
       activeDataloggers = getAllDataloggers();
+      
+      setupLog(
+        `Loaded config with ${pc.green(
+          config.dataloggers.length
+        )} datalogger(s)`
+      );
+      setupLog(`All dataloggers: ${pc.blue(activeDataloggers.length)}`);
 
-      // Check if we have a default config that needs auto-detection
-      const isDefaultConfig =
-        config.dataloggers.length === 1 &&
-        config.dataloggers[0].id === "default" &&
-        config.dataloggers[0].thermocouples.length === 0;
-
-      if (isDefaultConfig) {
-        // Default config detected - trigger auto-detection
-        throw new Error("Default config detected - running auto-detection");
-      }
-
-      if (activeDataloggers.length > 0) {
+      // Pre-populate channel data for all configured thermocouples from all dataloggers
+      for (const datalogger of activeDataloggers) {
         setupLog(
-          `Loaded config with ${pc.green(
-            config.dataloggers.length
-          )} datalogger(s)`
+          `  - ${datalogger.name}: ${pc.green(
+            datalogger.thermocouples.length
+          )} thermocouples @ ${pc.cyan(datalogger.serial.path)}`
         );
-        setupLog(`All dataloggers: ${pc.blue(activeDataloggers.length)}`);
 
-        // Pre-populate channel data for all configured thermocouples from all dataloggers
-        for (const datalogger of activeDataloggers) {
-          setupLog(
-            `  - ${datalogger.name}: ${pc.green(
-              datalogger.thermocouples.length
-            )} thermocouples @ ${pc.cyan(datalogger.serial.path)}`
+        for (const tc of datalogger.thermocouples) {
+          const channelHex = Object.keys(channelMap).find(
+            (key) => channelMap[key] === tc.channel
           );
-
-          for (const tc of datalogger.thermocouples) {
-            const channelHex = Object.keys(channelMap).find(
-              (key) => channelMap[key] === tc.channel
-            );
-            if (channelHex) {
-              const channelKey = createChannelKey(datalogger.id, channelHex);
-              channelData[channelKey] = {
-                temperature: 0,
-                lastUpdate: new Date(0),
-                config: tc,
-                detected: false, // Pre-configured, not detected
-                firstSeen: new Date(),
-                dataCount: 0,
-                dataloggerID: datalogger.id,
-                dataloggerName: datalogger.name,
-              };
-            }
+          if (channelHex) {
+            const channelKey = createChannelKey(datalogger.id, channelHex);
+            channelData[channelKey] = {
+              temperature: 0,
+              lastUpdate: new Date(0),
+              config: tc,
+              detected: false, // Pre-configured, not detected
+              firstSeen: new Date(),
+              dataCount: 0,
+              dataloggerID: datalogger.id,
+              dataloggerName: datalogger.name,
+            };
           }
         }
-      } else {
-        setupLog("No dataloggers found in configuration");
-        throw new Error("No dataloggers configured");
       }
-    } catch (configError: any) {
-      // Config loading failed - run auto-detection
-      setupLog(`${pc.yellow("Auto-detecting")} dataloggers...`);
-
+    } else {
+      // No config available - run auto-detection
       try {
-        // Import auto-detection functions dynamically to avoid circular imports
-        const { autoDetectDataloggers, setupConfig } = await import("./config");
-
-        // Try automatic detection first (no user interaction)
-        const detectedDataloggers = await autoDetectDataloggers();
-
-        if (detectedDataloggers.length > 0) {
-          // Create config from detected dataloggers using shared logic
-          const configDataloggers: DataloggerConfig[] = detectedDataloggers.map(
-            (dl, index) =>
-              createDefaultDataloggerConfig(index + 1, dl.path, dl.channels)
-          );
-
-          config = {
-            dataloggers: configDataloggers,
-            globalSettings: {
-              connectionTimeout: 60,
-              defaultThermocoupleType: "K",
-            },
-          };
-
-          activeDataloggers = getAllDataloggers();
-          setupLog(
-            `Found ${pc.green(activeDataloggers.length)} datalogger(s)`
-          );
-        } else {
-          // Fall back to interactive setup if auto-detection fails
-          setupLog(`${pc.yellow("Running")} interactive setup...`);
-          config = await setupConfig();
-          activeDataloggers = getAllDataloggers();
-          setupLog(
-            `Configured ${pc.green(activeDataloggers.length)} datalogger(s)`
-          );
-        }
+        config = await autoDetectAndCreateConfig();
+        
+        // Save the auto-detected config for future runs
+        writeFileSync("./config.json", JSON.stringify(config, null, 2));
+        setupLog(`Auto-detected config saved to ${pc.cyan('./config.json')}`);
+        
+        activeDataloggers = getAllDataloggers();
+        setupLog(
+          `Auto-detected ${pc.green(activeDataloggers.length)} datalogger(s)`
+        );
 
         // Pre-populate channel data for all configured thermocouples from all dataloggers
         for (const datalogger of activeDataloggers) {

@@ -792,31 +792,11 @@ async function promptForSerialPort(): Promise<{
 
 /**
  * Loads the application configuration from the config.json file
- * If the file doesn't exist or is invalid, returns a minimal default configuration
- * This allows the app to run with pure auto-detection if no config is available
- * @returns The loaded configuration or a minimal default
+ * @returns The loaded configuration or null if not found/invalid
  */
-export function loadConfig(): AppConfig {
-  // Create minimal default configuration for fallback
-  const defaultConfig: AppConfig = {
-    dataloggers: [{
-      id: "default",
-      name: "Default Datalogger",
-      serial: {
-        path: "/dev/tty.usbserial", // Default path (likely to fail, will trigger serial error)
-      },
-      thermocouples: [], // Empty - will use pure auto-detection
-      autoDetected: false
-    }],
-    globalSettings: {
-      connectionTimeout: 60,
-      defaultThermocoupleType: "K"
-    }
-  };
-
+export function loadConfig(): AppConfig | null {
   if (!existsSync(CONFIG_PATH)) {
-    // Return default config silently - startup messages handled in index.ts
-    return defaultConfig;
+    return null;
   }
 
   try {
@@ -829,17 +809,55 @@ export function loadConfig(): AppConfig {
     
   } catch (err: any) {
     console.warn(`config.json is invalid: ${err.message || err}`);
-    console.log(`Falling back to auto-detection mode`);
-    console.log(
-      `Fix config.json or delete it and run 'npm run setup' to reconfigure`
-    );
-    return defaultConfig;
+    console.log(`Fix config.json or delete it and run 'npm run setup' to reconfigure`);
+    return null;
+  }
+}
+
+/**
+ * Auto-detects dataloggers and creates a configuration from the results
+ * This combines auto-detection with config creation for use by index.ts
+ * @returns Promise resolving to the auto-detected configuration
+ */
+export async function autoDetectAndCreateConfig(): Promise<AppConfig> {
+  console.log(`${pc.yellow("Auto-detecting")} dataloggers...`);
+  
+  try {
+    // Try automatic detection first (no user interaction)
+    const detectedDataloggers = await autoDetectDataloggers();
+    
+    if (detectedDataloggers.length > 0) {
+      // Create config from detected dataloggers using shared logic
+      const configDataloggers: DataloggerConfig[] = detectedDataloggers.map(
+        (dl, index) =>
+          createDefaultDataloggerConfig(index + 1, dl.path, dl.channels)
+      );
+
+      const config: AppConfig = {
+        dataloggers: configDataloggers,
+        globalSettings: {
+          connectionTimeout: 60,
+          defaultThermocoupleType: "K",
+        },
+      };
+
+      return config;
+    } else {
+      // Fall back to interactive setup if auto-detection fails
+      console.log(`${pc.yellow("Running")} interactive setup...`);
+      return await setupConfig();
+    }
+    
+  } catch (autoDetectError: any) {
+    console.error(`${pc.red("Auto-detection failed:")} ${autoDetectError.message}`);
+    throw autoDetectError;
   }
 }
 
 /**
  * Setup command to generate configuration interactively with intelligent auto-detection
  * Uses smart port detection and supports multiple dataloggers
+ * Auto-detects dataloggers, tests channels, and creates config with detected channels
  * @returns Promise resolving to the generated configuration
  */
 export async function setupConfig(): Promise<AppConfig> {
@@ -853,7 +871,7 @@ export async function setupConfig(): Promise<AppConfig> {
   console.log("4. Connect thermocouples to desired channels\n");
 
   try {
-    // Use intelligent auto-detection
+    // Use intelligent auto-detection with full channel testing
     const detectedDataloggers = await autoDetectDataloggers();
     
     if (detectedDataloggers.length === 0) {
@@ -862,11 +880,19 @@ export async function setupConfig(): Promise<AppConfig> {
       
       // Fallback to manual selection
       const result = await promptForSerialPort();
-      return await createConfigFromManualSelection(result);
+      const config = await createConfigFromManualSelection(result);
+      // Save the config to file
+      writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+      console.log(`\nConfiguration saved to ${pc.cyan('./config.json')}`);
+      return config;
     }
     
-    // Handle detected dataloggers
-    return await handleDetectedDataloggers(detectedDataloggers);
+    // Handle detected dataloggers and save config
+    const config = await handleDetectedDataloggers(detectedDataloggers);
+    // Save the config to file
+    writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    console.log(`\nConfiguration saved to ${pc.cyan('./config.json')}`);
+    return config;
     
   } catch (error: any) {
     console.error(`Setup failed: ${error.message}`);
@@ -893,7 +919,7 @@ async function createConfigFromManualSelection(result: {
     }
   };
 
-  await saveAndDisplayConfig(config, [result]);
+  await displayConfig(config, [result]);
   return config;
 }
 
@@ -936,20 +962,17 @@ async function createConfigFromDetectedDataloggers(dataloggers: {
     }
   };
 
-  await saveAndDisplayConfig(config, dataloggers);
+  await displayConfig(config, dataloggers);
   return config;
 }
 
 /**
- * Saves configuration and displays setup results
+ * Displays setup results (no longer saves config - handled by caller)
  */
-async function saveAndDisplayConfig(config: AppConfig, results: {
+async function displayConfig(config: AppConfig, results: {
   path: string;
   channels: { hex: string; number: number; temperature: number }[];
 }[]): Promise<void> {
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-  console.log(`\nConfiguration saved to ${pc.cyan('./config.json')}`);
-
   // Display results for each datalogger
   config.dataloggers.forEach((datalogger, index) => {
     const result = results[index];

@@ -10,9 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm start` - Start complete application (serial monitoring + web server + live dashboard)
 - `npm run server` - Start web server only
 
-### Silent Mode
+### CLI Mode
 
-- `npm run start:silent` - Start application with console output suppressed
+- `npm run cli` - CLI-only mode (tables only, no web server)
 
 ## Application Architecture
 
@@ -21,7 +21,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `index.ts` - Main entry point: serial monitoring + web server + live dashboard
 - `server.ts` - Hono web server with REST API and Prometheus metrics
 - `config.ts` - Configuration management and setup utilities
-- `logger.ts` - Enhanced logging with live dashboard mode and SILENT support
 - `parser.ts` - Shared HH-4208SD data parsing logic with validation
 
 ### Data Flow
@@ -49,9 +48,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Auto-Detection System
 
+### Multi-Datalogger Support
+- **Multiple devices**: Supports connecting multiple HH-4208SD dataloggers simultaneously
+- **Auto-detection**: Automatically detects and configures multiple dataloggers
+- **Unique naming**: Uses "D1-T1", "D2-T3" format for thermocouple names across dataloggers
+- **Port scoring**: Intelligent port scoring system prioritizes likely datalogger devices
+
 ### Channel Discovery
 - **Dynamic Detection**: Channels automatically detected when first data arrives
-- **Smart Defaults**: Auto-generated names ("Channel 1", "Channel 2") and Type K thermocouples
+- **Smart Defaults**: Auto-generated names ("D1-T1", "D1-T2") and Type K thermocouples
 - **Configuration Overlay**: User config overrides defaults for matching channels
 - **No Pre-configuration**: Works immediately without channel setup
 
@@ -122,6 +127,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Notes
 
+### Testing and Linting
+
+- **No test framework**: Currently no unit tests or testing framework configured
+- **No linting**: No ESLint or similar linting tools configured
+- **TypeScript validation**: Uses strict TypeScript checking for type safety
+- **Manual testing**: Use hardware setup and `npm run setup` for integration testing
+
 ### TypeScript Configuration
 
 - Uses latest ESNext features with strict type checking
@@ -139,7 +151,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Live dashboard**: Console table updates every 2 seconds with ANSI escape codes
 - **Dashboard logging**: Individual events appear above live table in dashboard mode
 - **Port 3000**: Web server always runs on localhost:3000
-- **Silent mode**: SILENT=true completely suppresses all console output including dashboard
+- **CLI mode**: CLI_ONLY=true shows only tables, no web server
+- **Server mode**: Default mode - starts web server and shows CLI tables (unless CLI_ONLY=true)
 
 ### Console Dashboard Features
 
@@ -147,7 +160,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **ANSI terminal control**: Uses escape codes for cursor positioning and screen clearing
 - **Dashboard logging**: Events and messages appear above the live table
 - **Immediate updates**: Table refreshes on new data arrival plus periodic 2-second updates
-- **Dashboard toggle**: Automatically enabled 1 second after startup messages
+- **Dashboard toggle**: Automatically enabled 1 second after startup messages (CLI mode only)
 
 ### Error Handling
 
@@ -155,3 +168,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Serial port resilience**: Graceful handling of connection failures
 - **API stability**: Appropriate HTTP status codes for all conditions
 - **Auto-recovery**: Channels auto-reconnect when data resumes
+
+# important-instruction-reminders
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.

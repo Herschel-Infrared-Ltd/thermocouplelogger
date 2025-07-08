@@ -1,4 +1,4 @@
-import { SerialPort } from "serialport";
+import { SerialPort } from "./serialport.js";
 import { loadConfig } from "./config";
 import type { AppConfig, DataloggerConfig, ThermocoupleConfig } from "./config";
 import CliTable3 from "cli-table3";

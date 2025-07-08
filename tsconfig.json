@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    // Enable latest features
+    // Bun + latest features
     "lib": ["ESNext", "DOM"],
     "target": "ESNext",
     "module": "ESNext",
@@ -8,16 +8,23 @@
     "jsx": "react-jsx",
     "allowJs": true,
 
-    // Bundler mode
+    // Bun bundler mode
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
 
     // Best practices
     "strict": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Bun compatibility
+    "types": ["bun-types"],
 
     // Some stricter flags (disabled by default)
     "noUnusedLocals": false,

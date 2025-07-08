@@ -1,5 +1,5 @@
 import { existsSync, writeFileSync, readFileSync } from "fs";
-import { SerialPort } from "serialport";
+import { SerialPort } from "./serialport.js";
 import * as readline from "readline";
 import * as os from "os";
 import { processSerialBuffer, createDefaultDataloggerConfig } from "./parser";
@@ -596,7 +596,7 @@ async function promptForSerialPort(): Promise<{
 
     // Filter out system ports that are unlikely to be the thermocouple logger
     const filteredPorts = ports.filter((port) => {
-      const path = port.path.toLowerCase();
+      const path = (port.path || "").toLowerCase();
       const platform = os.platform();
 
       if (platform === "darwin") {
@@ -633,16 +633,16 @@ async function promptForSerialPort(): Promise<{
     portsToShow.forEach((port, index) => {
       const manufacturer = port.manufacturer || "Unknown";
       const productId = port.productId || "N/A";
-      const vendorId = port.vendorId || "N/A";
+      const vendorId = port.vendorId || (port.usbVendorId ? `0x${port.usbVendorId.toString(16)}` : "N/A");
       const serialNumber = port.serialNumber ? ` SN:${port.serialNumber}` : "";
 
       // Add helpful device type hints
       let deviceHint = "";
-      if (port.vendorId === "0403") {
+      if (port.usbVendorId === 0x0403 || vendorId === "0403") {
         deviceHint = " [FTDI - Compatible with HH-4208SD]";
-      } else if (port.vendorId === "10c4") {
+      } else if (port.usbVendorId === 0x10c4 || vendorId === "10c4") {
         deviceHint = " [Silicon Labs CP210x]";
-      } else if (port.vendorId === "1a86") {
+      } else if (port.usbVendorId === 0x1a86 || vendorId === "1a86") {
         deviceHint = " [CH340/CH341 USB Serial]";
       } else if (manufacturer && manufacturer.toLowerCase().includes("ftdi")) {
         deviceHint = " [FTDI - Compatible with HH-4208SD]";
@@ -673,10 +673,11 @@ async function promptForSerialPort(): Promise<{
       });
 
       if (autoSelect) {
-        console.log(`Selected: ${portsToShow[0].path}`);
+        const selectedPath = portsToShow[0].path!;
+        console.log(`Selected: ${selectedPath}`);
         // Test the auto-selected port for valid HH-4208SD data
         try {
-          const result = await testPortForData(portsToShow[0].path);
+          const result = await testPortForData(selectedPath);
           return result;
         } catch (error: any) {
           console.error(`Data validation failed: ${error.message}`);
@@ -688,7 +689,7 @@ async function promptForSerialPort(): Promise<{
 
           const continueAnyway = await new Promise<boolean>((resolve) => {
             rl.question(
-              `\nContinue with ${portsToShow[0].path} anyway? (y/N): `,
+              `\nContinue with ${selectedPath} anyway? (y/N): `,
               (answer: string) => {
                 rl.close();
                 resolve(answer.trim().toLowerCase() === "y");
@@ -698,9 +699,9 @@ async function promptForSerialPort(): Promise<{
 
           if (continueAnyway) {
             console.log(
-              `Continuing with ${portsToShow[0].path} - data validation can be done later`
+              `Continuing with ${selectedPath} - data validation can be done later`
             );
-            return { path: portsToShow[0].path, channels: [] };
+            return { path: selectedPath, channels: [] };
           } else {
             throw new Error("Setup cancelled by user");
           }
@@ -738,14 +739,15 @@ async function promptForSerialPort(): Promise<{
     }
 
     const selectedPort = portsToShow[selectedIndex];
-    console.log(`\nSelected: ${selectedPort.path}`);
+    const selectedPath = selectedPort.path!;
+    console.log(`\nSelected: ${selectedPath}`);
     if (selectedPort.manufacturer) {
       console.log(`Device: ${selectedPort.manufacturer}`);
     }
 
     // Test the selected port for valid HH-4208SD data
     try {
-      const result = await testPortForData(selectedPort.path);
+      const result = await testPortForData(selectedPath);
       return result;
     } catch (error: any) {
       console.error(`Data validation failed: ${error.message}`);
@@ -757,7 +759,7 @@ async function promptForSerialPort(): Promise<{
 
       const continueAnyway = await new Promise<boolean>((resolve) => {
         rl.question(
-          `\nContinue with ${selectedPort.path} anyway? (y/N): `,
+          `\nContinue with ${selectedPath} anyway? (y/N): `,
           (answer: string) => {
             rl.close();
             resolve(answer.trim().toLowerCase() === "y");
@@ -767,9 +769,9 @@ async function promptForSerialPort(): Promise<{
 
       if (continueAnyway) {
         console.log(
-          `Continuing with ${selectedPort.path} - data validation can be done later`
+          `Continuing with ${selectedPath} - data validation can be done later`
         );
-        return { path: selectedPort.path, channels: [] };
+        return { path: selectedPath, channels: [] };
       } else {
         throw new Error("Setup cancelled by user");
       }

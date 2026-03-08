@@ -3,7 +3,7 @@ import { SerialPort } from "serialport";
 import * as readline from "readline";
 import * as os from "os";
 import { processSerialBuffer, createDefaultDataloggerConfig } from "./parser";
-import pc from 'picocolors';
+import pc from "picocolors";
 
 /**
  * Interface for scored serial port with likelihood rating
@@ -15,6 +15,44 @@ interface ScoredPort {
   score: number;
   /** Human-readable reason for the score */
   reason: string;
+}
+
+interface ThingsBoardProvisionResponse {
+  credentialsType?: string;
+  credentialsValue?: string;
+  status?: string;
+  errorMsg?: string;
+}
+
+async function postProvisionRequest(
+  baseUrl: string,
+  payload: {
+    deviceName: string;
+    provisionDeviceKey: string;
+    provisionDeviceSecret: string;
+  },
+): Promise<Response> {
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  const body = JSON.stringify(payload);
+
+  const primaryResponse = await fetch(`${baseUrl}/api/v1/provision`, {
+    method: "POST",
+    headers,
+    body,
+  });
+
+  if (primaryResponse.status !== 404 && primaryResponse.status !== 405) {
+    return primaryResponse;
+  }
+
+  return fetch(`${baseUrl}/provision`, {
+    method: "POST",
+    headers,
+    body,
+  });
 }
 
 /**
@@ -35,6 +73,8 @@ export interface ThermocoupleConfig {
   type: string;
   /** Channel number (1-12) corresponding to the hardware channel */
   channel: number;
+  /** Optional ThingsBoard device token for per-probe telemetry */
+  thingsboardDeviceToken?: string;
 }
 
 /**
@@ -45,6 +85,8 @@ export interface DataloggerConfig {
   id: string;
   /** Human-readable name for this datalogger */
   name: string;
+  /** Optional ThingsBoard device token for per-datalogger telemetry */
+  thingsboardDeviceToken?: string;
   /** Serial port configuration */
   serial: SerialConfig;
   /** Array of configured thermocouple channels for this datalogger */
@@ -70,7 +112,6 @@ export interface AppConfig {
   };
 }
 
-
 /** Path to the configuration file */
 const CONFIG_PATH = "./config.json";
 
@@ -84,7 +125,7 @@ const CONFIG_PATH = "./config.json";
 function scorePort(port: any): ScoredPort {
   let score = 0;
   const reasons: string[] = [];
-  
+
   // Vendor ID based scoring (strict - only known compatible chips)
   const vid = port.vendorId?.toLowerCase();
   if (vid === "0403") {
@@ -98,7 +139,7 @@ function scorePort(port: any): ScoredPort {
     score -= 30;
     reasons.push("Unknown/incompatible chip");
   }
-  
+
   // Port path based scoring
   const path = port.path?.toLowerCase() || "";
   if (path.includes("usbserial")) {
@@ -108,12 +149,12 @@ function scorePort(port: any): ScoredPort {
     score += 5;
     reasons.push("USB modem/CDC device");
   }
-  
+
   if (path.includes("ftdi")) {
     score += 10;
     reasons.push("FTDI in path");
   }
-  
+
   if (path.includes("ttyusb")) {
     score += 5;
     reasons.push("Linux USB serial");
@@ -121,7 +162,7 @@ function scorePort(port: any): ScoredPort {
     score += 5;
     reasons.push("Linux CDC ACM");
   }
-  
+
   // Manufacturer string bonus
   const manufacturer = port.manufacturer?.toLowerCase() || "";
   if (manufacturer.includes("ftdi")) {
@@ -134,34 +175,37 @@ function scorePort(port: any): ScoredPort {
     score += 5;
     reasons.push("Prolific manufacturer");
   }
-  
+
   // Exclusions (penalty scoring)
   if (path.includes("bluetooth")) {
     score -= 50;
     reasons.push("Bluetooth device (excluded)");
   }
-  
+
   if (path.includes("debug")) {
     score -= 30;
     reasons.push("Debug device (excluded)");
   }
-  
+
   // Platform-specific built-in port detection
   const platform = os.platform();
-  if (platform === "darwin" && (path.includes("bluetooth") || path.includes("debug"))) {
+  if (
+    platform === "darwin" &&
+    (path.includes("bluetooth") || path.includes("debug"))
+  ) {
     score -= 20;
     reasons.push("Built-in macOS port");
   }
-  
+
   // Ensure score doesn't go negative
   score = Math.max(0, score);
-  
+
   const reason = reasons.length > 0 ? reasons.join(", ") : "Unknown device";
-  
+
   return {
     port,
     score,
-    reason
+    reason,
   };
 }
 
@@ -176,16 +220,18 @@ function scorePort(port: any): ScoredPort {
 async function testPortForDataQuick(
   portPath: string,
   timeoutMs: number = 10000,
-  silent: boolean = true
+  silent: boolean = true,
 ): Promise<{
   path: string;
   channels: { hex: string; number: number; temperature: number }[];
 }> {
   if (!silent) {
     console.log(`\nTesting ${portPath} for valid thermocouple data...`);
-    console.log(`Looking for HH-4208SD data format (up to ${timeoutMs/1000} seconds)...`);
+    console.log(
+      `Looking for HH-4208SD data format (up to ${timeoutMs / 1000} seconds)...`,
+    );
   }
-  
+
   return new Promise((resolve, reject) => {
     let port: SerialPort;
     let buffer = "";
@@ -203,16 +249,20 @@ async function testPortForDataQuick(
       if (!dataReceived) {
         reject(new Error(`No data received from ${portPath}`));
       } else if (discoveredChannels.size === 0) {
-        reject(new Error(`Data received from ${portPath} but format not recognized as HH-4208SD`));
+        reject(
+          new Error(
+            `Data received from ${portPath} but format not recognized as HH-4208SD`,
+          ),
+        );
       } else {
         // Success - found valid channels
         const sortedChannels = Array.from(discoveredChannels.values()).sort(
-          (a, b) => a.number - b.number
+          (a, b) => a.number - b.number,
         );
-        resolve({path: portPath, channels: sortedChannels});
+        resolve({ path: portPath, channels: sortedChannels });
       }
     }, timeoutMs);
-    
+
     function cleanup() {
       if (timeout) clearTimeout(timeout);
       if (port && port.isOpen) {
@@ -223,30 +273,30 @@ async function testPortForDataQuick(
         }
       }
     }
-    
+
     try {
       // Open port for testing
       port = new SerialPort({
         path: portPath,
         baudRate: 9600, // Standard HH-4208SD baud rate
       });
-      
+
       port.on("data", (data: Buffer) => {
         dataReceived = true;
         const rawData = data.toString("ascii");
-        
+
         // Use shared parser to process data
         const result = processSerialBuffer(buffer, rawData);
         buffer = result.buffer;
-        
+
         // Check for any valid messages and track all channels
         for (const parsed of result.messages) {
           if (parsed.valid && parsed.channelHex && parsed.channelNumber) {
             const channelId = parsed.channelHex;
-            
+
             // Track that we've seen this channel
             allChannelsSeen.add(channelId);
-            
+
             // Only store channels with temperature readings that indicate connected thermocouples
             if (
               parsed.temperature !== undefined &&
@@ -261,30 +311,29 @@ async function testPortForDataQuick(
                 });
                 if (!silent) {
                   console.log(
-                    ` Discovered channel: ${parsed.channelHex} (Channel ${parsed.channelNumber}) - ${parsed.temperature}°C`
+                    ` Discovered channel: ${parsed.channelHex} (Channel ${parsed.channelNumber}) - ${parsed.temperature}°C`,
                   );
                 }
               }
             }
-            
+
             // Exit early if we've seen all 12 possible channels
             if (allChannelsSeen.size === 12) {
               cleanup();
-              const sortedChannels = Array.from(discoveredChannels.values()).sort(
-                (a, b) => a.number - b.number
-              );
-              resolve({path: portPath, channels: sortedChannels});
+              const sortedChannels = Array.from(
+                discoveredChannels.values(),
+              ).sort((a, b) => a.number - b.number);
+              resolve({ path: portPath, channels: sortedChannels });
               return;
             }
           }
         }
       });
-      
+
       port.on("error", (err: Error) => {
         cleanup();
         reject(new Error(`Cannot open ${portPath}: ${err.message}`));
       });
-      
     } catch (error: any) {
       cleanup();
       reject(new Error(`Failed to test ${portPath}: ${error.message}`));
@@ -299,16 +348,12 @@ async function testPortForDataQuick(
  * @returns Promise resolving to object with port path and discovered channels
  * @throws Error with specific guidance if no valid data found
  */
-async function testPortForData(
-  portPath: string
-): Promise<{
+async function testPortForData(portPath: string): Promise<{
   path: string;
   channels: { hex: string; number: number; temperature: number }[];
 }> {
   console.log(`\nTesting ${portPath} for valid thermocouple data...`);
-  console.log(
-    "Looking for HH-4208SD data format (up to 30 seconds)..."
-  );
+  console.log("Looking for HH-4208SD data format (up to 30 seconds)...");
   console.log("Collecting all active channels...");
 
   return new Promise((resolve, reject) => {
@@ -334,8 +379,8 @@ async function testPortForData(
               `2. Set USB cable switch to position "2" (photo mode)\n` +
               `3. Ensure data logging is enabled on the device\n` +
               `4. Verify thermocouple connections\n\n` +
-              `The device should be continuously outputting temperature data.`
-          )
+              `The device should be continuously outputting temperature data.`,
+          ),
         );
       } else if (discoveredChannels.size === 0) {
         reject(
@@ -345,22 +390,20 @@ async function testPortForData(
               `1. USB cable switch is set to position "2" (photo mode)\n` +
               `2. Device is HH-4208SD thermocouple data logger\n` +
               `3. Sampling rate is set to "1" second\n\n` +
-              `Expected format: STX + 2-digit hex channel + sensor data`
-          )
+              `Expected format: STX + 2-digit hex channel + sensor data`,
+          ),
         );
       } else {
         console.log(` Channel discovery completed on ${portPath}`);
-        console.log(
-          `Found ${discoveredChannels.size} active channels:`
-        );
+        console.log(`Found ${discoveredChannels.size} active channels:`);
 
         // Sort channels by channel number for display
         const sortedChannels = Array.from(discoveredChannels.values()).sort(
-          (a, b) => a.number - b.number
+          (a, b) => a.number - b.number,
         );
         sortedChannels.forEach((ch) => {
           console.log(
-            `  - Channel ${ch.hex} (Channel ${ch.number}): ${ch.temperature}°C`
+            `  - Channel ${ch.hex} (Channel ${ch.number}): ${ch.temperature}°C`,
           );
         });
 
@@ -416,7 +459,7 @@ async function testPortForData(
                   temperature: parsed.temperature,
                 });
                 console.log(
-                  ` Discovered channel: ${parsed.channelHex} (Channel ${parsed.channelNumber}) - ${parsed.temperature}°C`
+                  ` Discovered channel: ${parsed.channelHex} (Channel ${parsed.channelNumber}) - ${parsed.temperature}°C`,
                 );
               }
             }
@@ -426,16 +469,16 @@ async function testPortForData(
               cleanup();
               console.log(` All 12 channels detected on ${portPath}`);
               console.log(
-                `Found ${discoveredChannels.size} channels with valid temperatures:`
+                `Found ${discoveredChannels.size} channels with valid temperatures:`,
               );
 
               // Sort channels by channel number for display
               const sortedChannels = Array.from(
-                discoveredChannels.values()
+                discoveredChannels.values(),
               ).sort((a, b) => a.number - b.number);
               sortedChannels.forEach((ch) => {
                 console.log(
-                  `  - Channel ${ch.hex} (Channel ${ch.number}): ${ch.temperature}°C`
+                  `  - Channel ${ch.hex} (Channel ${ch.number}): ${ch.temperature}°C`,
                 );
               });
 
@@ -465,65 +508,81 @@ async function testPortForData(
  * Automatically detects HH-4208SD dataloggers by scoring and testing ports
  * @returns Promise resolving to array of validated dataloggers found
  */
-export async function autoDetectDataloggers(): Promise<{
-  path: string;
-  channels: { hex: string; number: number; temperature: number }[];
-  score: number;
-  reason: string;
-}[]> {
+export async function autoDetectDataloggers(): Promise<
+  {
+    path: string;
+    channels: { hex: string; number: number; temperature: number }[];
+    score: number;
+    reason: string;
+  }[]
+> {
   // Scan silently - main status shown in index.ts
-  
+
   try {
     // Get all available ports
     const ports = await SerialPort.list();
-    
+
     if (ports.length === 0) {
-      throw new Error("No serial ports found. Please connect your datalogger and try again.");
+      throw new Error(
+        "No serial ports found. Please connect your datalogger and try again.",
+      );
     }
-    
+
     // Score all ports
-    const scoredPorts = ports.map(scorePort).filter(sp => sp.score > 0);
-    
+    const scoredPorts = ports.map(scorePort).filter((sp) => sp.score > 0);
+
     // Sort by score (highest first)
     scoredPorts.sort((a, b) => b.score - a.score);
-    
+
     if (scoredPorts.length === 0) {
-      throw new Error("No likely datalogger ports found. Please check your device connection.");
+      throw new Error(
+        "No likely datalogger ports found. Please check your device connection.",
+      );
     }
-    
+
     // Show detected ports with simplified output
     scoredPorts.forEach((sp, index) => {
-      const confidence = sp.score >= 90 ? "Very High" : 
-                        sp.score >= 60 ? "High" : 
-                        sp.score >= 40 ? "Medium" : "Low";
-      console.log(`  ${index + 1}. ${pc.cyan(sp.port.path)} - Score: ${sp.score} (${confidence})`);
+      const confidence =
+        sp.score >= 90
+          ? "Very High"
+          : sp.score >= 60
+            ? "High"
+            : sp.score >= 40
+              ? "Medium"
+              : "Low";
+      console.log(
+        `  ${index + 1}. ${pc.cyan(sp.port.path)} - Score: ${sp.score} (${confidence})`,
+      );
     });
-    
+
     // Auto-test high-confidence ports (score >= 60)
-    const candidatePorts = scoredPorts.filter(sp => sp.score >= 60);
+    const candidatePorts = scoredPorts.filter((sp) => sp.score >= 60);
     // Auto-testing ports (status shown in main output)
-    
+
     const validDataloggers = [];
-    
+
     for (const scoredPort of candidatePorts) {
       try {
         console.log(`Testing ${pc.cyan(scoredPort.port.path)}...`);
-        const result = await testPortForDataQuick(scoredPort.port.path, 8000, true);
-        
+        const result = await testPortForDataQuick(
+          scoredPort.port.path,
+          8000,
+          true,
+        );
+
         if (result.channels.length > 0) {
           validDataloggers.push({
             ...result,
             score: scoredPort.score,
-            reason: scoredPort.reason
+            reason: scoredPort.reason,
           });
         }
       } catch (error: any) {
         // Port test failed - continue silently
       }
     }
-    
+
     return validDataloggers;
-    
   } catch (error: any) {
     console.error(`Error during auto-detection: ${error.message}`);
     throw error;
@@ -562,12 +621,11 @@ function validateDataloggerConfig(datalogger: any): void {
   ) {
     throw new Error(`Invalid datalogger config: ${JSON.stringify(datalogger)}`);
   }
-  
+
   for (const tc of datalogger.thermocouples) {
     validateThermocoupleConfig(tc);
   }
 }
-
 
 /**
  * Validates the configuration object structure and values
@@ -578,11 +636,11 @@ function validateConfig(config: any): asserts config is AppConfig {
   if (!config || !Array.isArray(config.dataloggers)) {
     throw new Error("Config must have a 'dataloggers' array");
   }
-  
+
   if (config.dataloggers.length === 0) {
     throw new Error("Config must have at least one datalogger");
   }
-  
+
   for (const datalogger of config.dataloggers) {
     validateDataloggerConfig(datalogger);
   }
@@ -633,7 +691,7 @@ async function promptForSerialPort(): Promise<{
 
     if (portsToShow.length === 0) {
       throw new Error(
-        "No serial ports found. Please connect your HH-4208SD thermocouple logger and try again."
+        "No serial ports found. Please connect your HH-4208SD thermocouple logger and try again.",
       );
     }
 
@@ -659,7 +717,7 @@ async function promptForSerialPort(): Promise<{
       console.log(
         `  ${index + 1}. ${
           port.path
-        } (${manufacturer}, VID:${vendorId}, PID:${productId}${serialNumber})${deviceHint}`
+        } (${manufacturer}, VID:${vendorId}, PID:${productId}${serialNumber})${deviceHint}`,
       );
     });
 
@@ -676,7 +734,7 @@ async function promptForSerialPort(): Promise<{
           (answer: string) => {
             rl.close();
             resolve(answer.trim().toLowerCase() !== "n");
-          }
+          },
         );
       });
 
@@ -700,13 +758,13 @@ async function promptForSerialPort(): Promise<{
               (answer: string) => {
                 rl.close();
                 resolve(answer.trim().toLowerCase() === "y");
-              }
+              },
             );
           });
 
           if (continueAnyway) {
             console.log(
-              `Continuing with ${portsToShow[0].path} - data validation can be done later`
+              `Continuing with ${portsToShow[0].path} - data validation can be done later`,
             );
             return { path: portsToShow[0].path, channels: [] };
           } else {
@@ -730,7 +788,7 @@ async function promptForSerialPort(): Promise<{
           const index = parseInt(answer.trim()) - 1;
           rl.close();
           resolve(index);
-        }
+        },
       );
     });
 
@@ -741,7 +799,7 @@ async function promptForSerialPort(): Promise<{
       isNaN(selectedIndex)
     ) {
       throw new Error(
-        "Invalid selection. Please restart and select a valid port number."
+        "Invalid selection. Please restart and select a valid port number.",
       );
     }
 
@@ -769,13 +827,13 @@ async function promptForSerialPort(): Promise<{
           (answer: string) => {
             rl.close();
             resolve(answer.trim().toLowerCase() === "y");
-          }
+          },
         );
       });
 
       if (continueAnyway) {
         console.log(
-          `Continuing with ${selectedPort.path} - data validation can be done later`
+          `Continuing with ${selectedPort.path} - data validation can be done later`,
         );
         return { path: selectedPort.path, channels: [] };
       } else {
@@ -785,7 +843,7 @@ async function promptForSerialPort(): Promise<{
   } catch (error: any) {
     console.error(`Error listing serial ports: ${error.message}`);
     throw new Error(
-      "Failed to detect serial ports. Please check your device connection and try again."
+      "Failed to detect serial ports. Please check your device connection and try again.",
     );
   }
 }
@@ -802,14 +860,15 @@ export function loadConfig(): AppConfig | null {
   try {
     const text = readFileSync(CONFIG_PATH, "utf-8");
     const parsedConfig = JSON.parse(text);
-    
+
     // Validate configuration
     validateConfig(parsedConfig);
     return parsedConfig;
-    
   } catch (err: any) {
     console.warn(`config.json is invalid: ${err.message || err}`);
-    console.log(`Fix config.json or delete it and run 'npm run setup' to reconfigure`);
+    console.log(
+      `Fix config.json or delete it and run 'npm run setup' to reconfigure`,
+    );
     return null;
   }
 }
@@ -821,16 +880,16 @@ export function loadConfig(): AppConfig | null {
  */
 export async function autoDetectAndCreateConfig(): Promise<AppConfig> {
   console.log(`${pc.yellow("Auto-detecting")} dataloggers...`);
-  
+
   try {
     // Try automatic detection first (no user interaction)
     const detectedDataloggers = await autoDetectDataloggers();
-    
+
     if (detectedDataloggers.length > 0) {
       // Create config from detected dataloggers using shared logic
       const configDataloggers: DataloggerConfig[] = detectedDataloggers.map(
         (dl, index) =>
-          createDefaultDataloggerConfig(index + 1, dl.path, dl.channels)
+          createDefaultDataloggerConfig(index + 1, dl.path, dl.channels),
       );
 
       const config: AppConfig = {
@@ -847,9 +906,10 @@ export async function autoDetectAndCreateConfig(): Promise<AppConfig> {
       console.log(`${pc.yellow("Running")} interactive setup...`);
       return await setupConfig();
     }
-    
   } catch (autoDetectError: any) {
-    console.error(`${pc.red("Auto-detection failed:")} ${autoDetectError.message}`);
+    console.error(
+      `${pc.red("Auto-detection failed:")} ${autoDetectError.message}`,
+    );
     throw autoDetectError;
   }
 }
@@ -863,7 +923,9 @@ export async function autoDetectAndCreateConfig(): Promise<AppConfig> {
 export async function setupConfig(): Promise<AppConfig> {
   console.log("\nHH-4208SD Thermocouple Logger Setup");
   console.log("\nIntelligent datalogger detection and configuration");
-  console.log("This setup will automatically detect and configure your HH-4208SD dataloggers.");
+  console.log(
+    "This setup will automatically detect and configure your HH-4208SD dataloggers.",
+  );
   console.log("\nIMPORTANT - HH-4208SD Device Configuration:");
   console.log("1. Set sampling rate to '1' (1 second intervals)");
   console.log("2. Set USB cable switch to position '2' (photo mode)");
@@ -873,31 +935,155 @@ export async function setupConfig(): Promise<AppConfig> {
   try {
     // Use intelligent auto-detection with full channel testing
     const detectedDataloggers = await autoDetectDataloggers();
-    
+
     if (detectedDataloggers.length === 0) {
       console.log("\nNo dataloggers detected automatically.");
       console.log("Falling back to manual port selection...");
-      
+
       // Fallback to manual selection
       const result = await promptForSerialPort();
       const config = await createConfigFromManualSelection(result);
+      await maybeProvisionThingsBoardProbeTokens(config);
       // Save the config to file
       writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-      console.log(`\nConfiguration saved to ${pc.cyan('./config.json')}`);
+      console.log(`\nConfiguration saved to ${pc.cyan("./config.json")}`);
       return config;
     }
-    
+
     // Handle detected dataloggers and save config
     const config = await handleDetectedDataloggers(detectedDataloggers);
+    await maybeProvisionThingsBoardProbeTokens(config);
     // Save the config to file
     writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-    console.log(`\nConfiguration saved to ${pc.cyan('./config.json')}`);
+    console.log(`\nConfiguration saved to ${pc.cyan("./config.json")}`);
     return config;
-    
   } catch (error: any) {
     console.error(`Setup failed: ${error.message}`);
     throw error;
   }
+}
+
+async function promptForInput(prompt: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(prompt, (answer: string) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function maybeProvisionThingsBoardProbeTokens(
+  appConfig: AppConfig,
+): Promise<void> {
+  const allProbes = appConfig.dataloggers.flatMap((datalogger) =>
+    datalogger.thermocouples.map((probe) => ({ datalogger, probe })),
+  );
+
+  if (allProbes.length === 0) {
+    console.log("\nNo probes available for ThingsBoard provisioning.");
+    return;
+  }
+
+  const shouldProvision = await promptForInput(
+    "\nProvision ThingsBoard devices for each probe now? (y/N): ",
+  );
+  if (shouldProvision.toLowerCase() !== "y") {
+    return;
+  }
+
+  const baseUrlInput = await promptForInput(
+    "ThingsBoard URL (default: http://localhost:8080): ",
+  );
+  const baseUrl = (baseUrlInput || "http://localhost:8080").replace(/\/+$/, "");
+  const provisionDeviceKey = await promptForInput("Provision device key: ");
+  const provisionDeviceSecret = await promptForInput(
+    "Provision device secret: ",
+  );
+
+  if (!provisionDeviceKey || !provisionDeviceSecret) {
+    console.log(
+      `${pc.yellow("Skipping provisioning:")} key/secret are required.`,
+    );
+    return;
+  }
+
+  console.log(
+    `\n${pc.yellow("Provisioning")} ${allProbes.length} probe device(s) on ${pc.cyan(baseUrl)}...`,
+  );
+
+  let successCount = 0;
+  let failureCount = 0;
+
+  for (const { datalogger, probe } of allProbes) {
+    const deviceName = `${datalogger.name} ${probe.name} (${datalogger.id}:${probe.channel})`;
+
+    try {
+      const response = await postProvisionRequest(baseUrl, {
+        deviceName,
+        provisionDeviceKey,
+        provisionDeviceSecret,
+      });
+
+      let responseBody: ThingsBoardProvisionResponse = {};
+      try {
+        responseBody = (await response.json()) as ThingsBoardProvisionResponse;
+      } catch {
+        responseBody = {};
+      }
+
+      if (!response.ok) {
+        const errMessage =
+          responseBody.errorMsg ||
+          `HTTP ${response.status} ${response.statusText}`;
+        throw new Error(errMessage);
+      }
+
+      if (
+        !responseBody.credentialsValue ||
+        typeof responseBody.credentialsValue !== "string"
+      ) {
+        throw new Error("Missing credentialsValue in provisioning response");
+      }
+      if (
+        responseBody.status &&
+        responseBody.status.toUpperCase() !== "SUCCESS"
+      ) {
+        throw new Error(
+          responseBody.errorMsg ||
+            `Provisioning status is not SUCCESS (${responseBody.status})`,
+        );
+      }
+      if (
+        responseBody.credentialsType &&
+        responseBody.credentialsType !== "ACCESS_TOKEN"
+      ) {
+        throw new Error(
+          `Unsupported credentialsType: ${responseBody.credentialsType}. Expected ACCESS_TOKEN`,
+        );
+      }
+
+      probe.thingsboardDeviceToken = responseBody.credentialsValue;
+      successCount++;
+      console.log(`${pc.green(" Provisioned")} ${deviceName}`);
+    } catch (error: any) {
+      failureCount++;
+      console.log(
+        `${pc.red(" Failed")} ${deviceName} -> ${error.message || "Unknown error"}`,
+      );
+    }
+  }
+
+  console.log(
+    `\nThingsBoard provisioning complete: ${pc.green(successCount.toString())} succeeded, ${pc.red(failureCount.toString())} failed.`,
+  );
+  console.log(
+    `${pc.gray("Saved")} per-probe access tokens into ${pc.cyan("./config.json")} (provision key/secret are not stored).`,
+  );
 }
 
 /**
@@ -907,7 +1093,11 @@ async function createConfigFromManualSelection(result: {
   path: string;
   channels: { hex: string; number: number; temperature: number }[];
 }): Promise<AppConfig> {
-  const datalogger = createDefaultDataloggerConfig(1, result.path, result.channels);
+  const datalogger = createDefaultDataloggerConfig(
+    1,
+    result.path,
+    result.channels,
+  );
   // Override autoDetected flag for manual selection
   datalogger.autoDetected = false;
 
@@ -915,8 +1105,8 @@ async function createConfigFromManualSelection(result: {
     dataloggers: [datalogger],
     globalSettings: {
       connectionTimeout: 60,
-      defaultThermocoupleType: "K"
-    }
+      defaultThermocoupleType: "K",
+    },
   };
 
   await displayConfig(config, [result]);
@@ -926,16 +1116,19 @@ async function createConfigFromManualSelection(result: {
 /**
  * Handles multiple detected dataloggers and user selection
  */
-async function handleDetectedDataloggers(detectedDataloggers: {
-  path: string;
-  channels: { hex: string; number: number; temperature: number }[];
-  score: number;
-  reason: string;
-}[]): Promise<AppConfig> {
-  
+async function handleDetectedDataloggers(
+  detectedDataloggers: {
+    path: string;
+    channels: { hex: string; number: number; temperature: number }[];
+    score: number;
+    reason: string;
+  }[],
+): Promise<AppConfig> {
   console.log(`\nFound ${detectedDataloggers.length} datalogger(s):`);
   detectedDataloggers.forEach((dl, index) => {
-    console.log(`  - Datalogger ${index + 1}: ${dl.channels.length} thermocouples @ ${pc.cyan(dl.path)}`);
+    console.log(
+      `  - Datalogger ${index + 1}: ${dl.channels.length} thermocouples @ ${pc.cyan(dl.path)}`,
+    );
   });
   return await createConfigFromDetectedDataloggers(detectedDataloggers);
 }
@@ -943,23 +1136,24 @@ async function handleDetectedDataloggers(detectedDataloggers: {
 /**
  * Creates configuration from detected dataloggers
  */
-async function createConfigFromDetectedDataloggers(dataloggers: {
-  path: string;
-  channels: { hex: string; number: number; temperature: number }[];
-  score: number;
-  reason: string;
-}[]): Promise<AppConfig> {
-  
+async function createConfigFromDetectedDataloggers(
+  dataloggers: {
+    path: string;
+    channels: { hex: string; number: number; temperature: number }[];
+    score: number;
+    reason: string;
+  }[],
+): Promise<AppConfig> {
   const configDataloggers: DataloggerConfig[] = dataloggers.map((dl, index) =>
-    createDefaultDataloggerConfig(index + 1, dl.path, dl.channels)
+    createDefaultDataloggerConfig(index + 1, dl.path, dl.channels),
   );
 
   const config: AppConfig = {
     dataloggers: configDataloggers,
     globalSettings: {
       connectionTimeout: 60,
-      defaultThermocoupleType: "K"
-    }
+      defaultThermocoupleType: "K",
+    },
   };
 
   await displayConfig(config, dataloggers);
@@ -969,10 +1163,13 @@ async function createConfigFromDetectedDataloggers(dataloggers: {
 /**
  * Displays setup results (no longer saves config - handled by caller)
  */
-async function displayConfig(config: AppConfig, results: {
-  path: string;
-  channels: { hex: string; number: number; temperature: number }[];
-}[]): Promise<void> {
+async function displayConfig(
+  config: AppConfig,
+  results: {
+    path: string;
+    channels: { hex: string; number: number; temperature: number }[];
+  }[],
+): Promise<void> {
   // Display results for each datalogger
   config.dataloggers.forEach((datalogger, index) => {
     const result = results[index];
@@ -980,20 +1177,24 @@ async function displayConfig(config: AppConfig, results: {
       console.log(`\n${datalogger.name} (${pc.cyan(datalogger.serial.path)}):`);
       console.log(`${pc.green(result.channels.length)} active channels:`);
       result.channels.forEach((channel) => {
-        console.log(
-          `  - Channel ${channel.number}: ${channel.temperature}°C`
-        );
+        console.log(`  - Channel ${channel.number}: ${channel.temperature}°C`);
       });
     } else {
-      console.log(`\n${datalogger.name} (${pc.cyan(datalogger.serial.path)}): No active channels detected`);
+      console.log(
+        `\n${datalogger.name} (${pc.cyan(datalogger.serial.path)}): No active channels detected`,
+      );
       console.log("Channels will be auto-detected when monitoring starts");
     }
   });
 
   console.log("\nNext Steps:");
   console.log("1. Run 'npm start' to begin monitoring");
-  console.log("2. Active channels will be automatically detected and displayed");
-  console.log("\nTip: You can customize datalogger and channel names by editing config.json");
+  console.log(
+    "2. Active channels will be automatically detected and displayed",
+  );
+  console.log(
+    "\nTip: You can customize datalogger and channel names by editing config.json",
+  );
 }
 
 // Run setup when this file is executed directly

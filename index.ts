@@ -18,12 +18,50 @@ const isCliOnly = process.env.CLI_ONLY === "true";
 /** Server mode is the default - starts server and shows CLI tables */
 const isServerMode = !isCliOnly;
 
+/** ThingsBoard HTTP telemetry settings */
+const THINGSBOARD_ENABLED = process.env.THINGSBOARD_ENABLED === "true";
+const THINGSBOARD_BASE_URL = (
+  process.env.THINGSBOARD_BASE_URL || "http://localhost:8080"
+).replace(/\/+$/, "");
+const THINGSBOARD_GLOBAL_DEVICE_TOKEN =
+  process.env.THINGSBOARD_DEVICE_TOKEN || "";
+const THINGSBOARD_CHANNEL_TOKEN_MAP: Record<string, string> = (() => {
+  const raw = process.env.THINGSBOARD_CHANNEL_TOKEN_MAP;
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      const tokenMap: Record<string, string> = {};
+      for (const [key, value] of Object.entries(
+        parsed as Record<string, unknown>,
+      )) {
+        if (typeof value === "string" && value.length > 0) {
+          tokenMap[key] = value;
+        }
+      }
+      return tokenMap;
+    }
+  } catch {
+    // Ignore malformed env var and continue without channel map overrides.
+  }
+  return {};
+})();
+const THINGSBOARD_TIMEOUT_MS = Number.parseInt(
+  process.env.THINGSBOARD_TIMEOUT_MS || "5000",
+  10,
+);
+
 /** Dashboard state tracking */
 let dashboardMode = false;
 let dashboardLines = 0;
 
 /** Track previous temperature values to detect changes */
 let previousTemperatures: { [key: string]: number } = {};
+
+/** Track ThingsBoard errors to avoid log spam */
+let lastThingsBoardError = "";
 
 /** ANSI escape codes for terminal control */
 const ANSI = {
@@ -135,6 +173,93 @@ export const channelData: {
  */
 export const channelMap = CHANNEL_MAP;
 
+function getChannelTokenMapKey(channel: ChannelData): string {
+  return `${channel.dataloggerID}:${channel.config.channel}`;
+}
+
+/**
+ * Resolve ThingsBoard token for a probe.
+ * Priority: per-probe token -> env channel map -> per-datalogger token -> global token.
+ */
+function getThingsBoardTokenForChannel(channel: ChannelData): string {
+  if (channel.config.thingsboardDeviceToken) {
+    return channel.config.thingsboardDeviceToken;
+  }
+
+  const tokenFromMap =
+    THINGSBOARD_CHANNEL_TOKEN_MAP[getChannelTokenMapKey(channel)];
+  if (tokenFromMap) {
+    return tokenFromMap;
+  }
+
+  const dataloggerInfo = dataloggerPorts.get(channel.dataloggerID);
+  if (dataloggerInfo?.config.thingsboardDeviceToken) {
+    return dataloggerInfo.config.thingsboardDeviceToken;
+  }
+
+  return THINGSBOARD_GLOBAL_DEVICE_TOKEN;
+}
+
+/**
+ * Publish one telemetry point to ThingsBoard over HTTP
+ */
+async function publishToThingsBoard(channel: ChannelData): Promise<void> {
+  if (!THINGSBOARD_ENABLED) {
+    return;
+  }
+
+  const token = getThingsBoardTokenForChannel(channel);
+  if (!token) {
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), THINGSBOARD_TIMEOUT_MS);
+
+  try {
+    const telemetry = {
+      ts: Date.now(),
+      values: {
+        temperature: channel.temperature,
+        channel: channel.config.channel,
+        thermocoupleName: channel.config.name,
+        thermocoupleType: channel.config.type,
+        dataloggerId: channel.dataloggerID,
+        dataloggerName: channel.dataloggerName,
+      },
+    };
+
+    const response = await fetch(
+      `${THINGSBOARD_BASE_URL}/api/v1/${token}/telemetry`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(telemetry),
+        signal: controller.signal,
+      },
+    );
+
+    if (!response.ok) {
+      const errorMessage = `ThingsBoard HTTP ${response.status} ${response.statusText}`;
+      if (errorMessage !== lastThingsBoardError) {
+        dashboardLog(`${pc.red(errorMessage)}`);
+        lastThingsBoardError = errorMessage;
+      }
+    } else if (lastThingsBoardError) {
+      dashboardLog(`${pc.green("ThingsBoard publishing recovered")}`);
+      lastThingsBoardError = "";
+    }
+  } catch (error: any) {
+    const errorMessage = `ThingsBoard publish failed: ${error.message}`;
+    if (errorMessage !== lastThingsBoardError) {
+      dashboardLog(`${pc.red(errorMessage)}`);
+      lastThingsBoardError = errorMessage;
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /**
  * Initialize the application with multi-datalogger support
  * Connects to all active dataloggers in parallel
@@ -143,16 +268,16 @@ async function initializeApp() {
   try {
     // Load configuration (read-only)
     const loadedConfig = loadConfig();
-    
+
     if (loadedConfig) {
       // Use existing config
       config = loadedConfig;
       activeDataloggers = getAllDataloggers();
-      
+
       setupLog(
         `Loaded config with ${pc.green(
-          config.dataloggers.length
-        )} datalogger(s)`
+          config.dataloggers.length,
+        )} datalogger(s)`,
       );
       setupLog(`All dataloggers: ${pc.blue(activeDataloggers.length)}`);
 
@@ -160,13 +285,13 @@ async function initializeApp() {
       for (const datalogger of activeDataloggers) {
         setupLog(
           `  - ${datalogger.name}: ${pc.green(
-            datalogger.thermocouples.length
-          )} thermocouples @ ${pc.cyan(datalogger.serial.path)}`
+            datalogger.thermocouples.length,
+          )} thermocouples @ ${pc.cyan(datalogger.serial.path)}`,
         );
 
         for (const tc of datalogger.thermocouples) {
           const channelHex = Object.keys(channelMap).find(
-            (key) => channelMap[key] === tc.channel
+            (key) => channelMap[key] === tc.channel,
           );
           if (channelHex) {
             const channelKey = createChannelKey(datalogger.id, channelHex);
@@ -187,27 +312,27 @@ async function initializeApp() {
       // No config available - run auto-detection
       try {
         config = await autoDetectAndCreateConfig();
-        
+
         // Save the auto-detected config for future runs
         writeFileSync("./config.json", JSON.stringify(config, null, 2));
-        setupLog(`Auto-detected config saved to ${pc.cyan('./config.json')}`);
-        
+        setupLog(`Auto-detected config saved to ${pc.cyan("./config.json")}`);
+
         activeDataloggers = getAllDataloggers();
         setupLog(
-          `Auto-detected ${pc.green(activeDataloggers.length)} datalogger(s)`
+          `Auto-detected ${pc.green(activeDataloggers.length)} datalogger(s)`,
         );
 
         // Pre-populate channel data for all configured thermocouples from all dataloggers
         for (const datalogger of activeDataloggers) {
           setupLog(
             `  - ${datalogger.name}: ${pc.green(
-              datalogger.thermocouples.length
-            )} thermocouples @ ${pc.cyan(datalogger.serial.path)}`
+              datalogger.thermocouples.length,
+            )} thermocouples @ ${pc.cyan(datalogger.serial.path)}`,
           );
 
           for (const tc of datalogger.thermocouples) {
             const channelHex = Object.keys(channelMap).find(
-              (key) => channelMap[key] === tc.channel
+              (key) => channelMap[key] === tc.channel,
             );
             if (channelHex) {
               const channelKey = createChannelKey(datalogger.id, channelHex);
@@ -225,10 +350,10 @@ async function initializeApp() {
           }
         }
       } catch (autoDetectError: any) {
+        console.error(`${pc.red("Setup failed:")} ${autoDetectError.message}`);
         console.error(
-          `${pc.red("Setup failed:")} ${autoDetectError.message}`
+          "Please connect your HH-4208SD datalogger and run 'npm run setup' to configure.",
         );
-        console.error("Please connect your HH-4208SD datalogger and run 'npm run setup' to configure.");
         process.exit(1);
       }
     }
@@ -255,8 +380,8 @@ function initializeDataloggers() {
     try {
       setupLog(
         `Connecting to ${datalogger.name} at ${pc.cyan(
-          datalogger.serial.path
-        )}...`
+          datalogger.serial.path,
+        )}...`,
       );
 
       const port = new SerialPort({
@@ -278,32 +403,73 @@ function initializeDataloggers() {
       setupLog(
         `${pc.red("Failed to connect")} to ${datalogger.name}: ${
           serialError.message
-        }`
+        }`,
       );
-      
+
       // Provide specific guidance for common errors
       if (serialError.message.includes("Access denied")) {
-        setupLog(`${pc.yellow("Hint:")} Port may be in use. Try disconnecting and reconnecting the device.`);
+        setupLog(
+          `${pc.yellow("Hint:")} Port may be in use. Try disconnecting and reconnecting the device.`,
+        );
       } else if (serialError.message.includes("ENOENT")) {
-        setupLog(`${pc.yellow("Hint:")} Port not found. Check if device is connected.`);
+        setupLog(
+          `${pc.yellow("Hint:")} Port not found. Check if device is connected.`,
+        );
       }
-      
+
       failureCount++;
     }
   }
 
   if (successCount === 0) {
     console.error(
-      `${pc.red("No dataloggers connected")} - cannot start application`
+      `${pc.red("No dataloggers connected")} - cannot start application`,
     );
-    console.error("Please connect your HH-4208SD datalogger and run 'npm run setup' to configure.");
+    console.error(
+      "Please connect your HH-4208SD datalogger and run 'npm run setup' to configure.",
+    );
     process.exit(1);
   } else {
     setupLog(
       `${pc.green("Successfully connected")} to ${successCount}/${
         activeDataloggers.length
-      } dataloggers`
+      } dataloggers`,
     );
+    if (THINGSBOARD_ENABLED) {
+      const configuredProbeCount = activeDataloggers.reduce(
+        (total, datalogger) => total + datalogger.thermocouples.length,
+        0,
+      );
+      const probesWithToken = activeDataloggers.reduce((total, datalogger) => {
+        const dataloggerTokenCount = datalogger.thermocouples.filter((tc) =>
+          Boolean(tc.thingsboardDeviceToken),
+        ).length;
+        return total + dataloggerTokenCount;
+      }, 0);
+      const hasAnyToken =
+        probesWithToken > 0 ||
+        Object.keys(THINGSBOARD_CHANNEL_TOKEN_MAP).length > 0 ||
+        THINGSBOARD_GLOBAL_DEVICE_TOKEN.length > 0 ||
+        activeDataloggers.some((dl) => Boolean(dl.thingsboardDeviceToken));
+      if (hasAnyToken) {
+        setupLog(
+          `${pc.green("ThingsBoard HTTP enabled")} -> ${pc.cyan(
+            THINGSBOARD_BASE_URL,
+          )}`,
+        );
+        setupLog(
+          `${pc.gray("Probe tokens configured:")} ${pc.cyan(
+            `${probesWithToken}/${configuredProbeCount}`,
+          )} ${pc.gray("(plus env map overrides if provided)")}`,
+        );
+      } else {
+        setupLog(
+          `${pc.yellow(
+            "ThingsBoard enabled but no tokens found. For one-device-per-probe, set thermocouples[].thingsboardDeviceToken or THINGSBOARD_CHANNEL_TOKEN_MAP",
+          )}`,
+        );
+      }
+    }
 
     // Start the server after successful connection (unless CLI-only mode)
     if (isServerMode) {
@@ -374,7 +540,7 @@ function setupDataloggerHandlers(dataloggerID: string, port: SerialPort) {
  */
 function processValidMessage(
   parsed: import("./parser").ParsedMessage,
-  dataloggerID: string
+  dataloggerID: string,
 ) {
   if (
     !parsed.valid ||
@@ -388,9 +554,7 @@ function processValidMessage(
   const channelKey = createChannelKey(dataloggerID, parsed.channelHex);
   const dataloggerInfo = dataloggerPorts.get(dataloggerID);
   if (!dataloggerInfo) {
-    setupLog(
-      `Cannot process message: Datalogger ${dataloggerID} not found`
-    );
+    setupLog(`Cannot process message: Datalogger ${dataloggerID} not found`);
     return;
   }
   const channelNum = parsed.channelNumber;
@@ -400,7 +564,7 @@ function processValidMessage(
   if (!channelData[channelKey]) {
     // Extract datalogger number and create default thermocouple name
     const dataloggerNumStr = extractDataloggerNumber(
-      dataloggerInfo.config.name
+      dataloggerInfo.config.name,
     );
     const dataloggerNum = parseInt(dataloggerNumStr, 10);
 
@@ -413,7 +577,7 @@ function processValidMessage(
 
     // Check if user config has an override for this channel on this datalogger
     const userConfig = dataloggerInfo.config.thermocouples.find(
-      (tc: ThermocoupleConfig) => tc.channel === channelNum
+      (tc: ThermocoupleConfig) => tc.channel === channelNum,
     );
     const finalConfig = userConfig || defaultConfig;
 
@@ -431,19 +595,25 @@ function processValidMessage(
     // Only log auto-detection in server mode for non-zero temperatures
     if (!isCliOnly && temperature !== 0) {
       dashboardLog(
-        `[${dataloggerInfo.config.name}] Auto-detected new channel: ${finalConfig.name} (Ch${channelNum}, Type ${finalConfig.type})`
+        `[${dataloggerInfo.config.name}] Auto-detected new channel: ${finalConfig.name} (Ch${channelNum}, Type ${finalConfig.type})`,
       );
     }
   }
 
   // Check if temperature changed
   const previousTemp = previousTemperatures[channelKey];
-  const temperatureChanged = previousTemp === undefined || previousTemp !== temperature;
+  const temperatureChanged =
+    previousTemp === undefined || previousTemp !== temperature;
 
   // Update channel data
   channelData[channelKey].temperature = temperature;
   channelData[channelKey].lastUpdate = new Date();
   channelData[channelKey].dataCount++;
+
+  const updatedChannel = channelData[channelKey];
+  if (temperature !== 0) {
+    void publishToThingsBoard(updatedChannel);
+  }
 
   // Update previous temperature tracker
   previousTemperatures[channelKey] = temperature;

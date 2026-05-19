@@ -11,12 +11,20 @@ import {
 } from "./parser";
 // Server will be imported after successful datalogger connection
 import pc from "picocolors";
+import { tbSinkFromConfig, type TbSink } from "./tb";
+import { startMock, defaultMockDataloggers, type MockDatalogger } from "./mock";
 
 /** CLI-only mode check - shows only tables, no server, minimal logging */
 const isCliOnly = process.env.CLI_ONLY === "true";
 
 /** Server mode is the default - starts server and shows CLI tables */
 const isServerMode = !isCliOnly;
+
+/** Mock mode synthesises HH-4208SD frames in-process instead of opening serial ports. */
+const isMockMode = process.env.MOCK === "true";
+
+/** Optional ThingsBoard Gateway MQTT sink. */
+let tbSink: TbSink | null = null;
 
 /** Dashboard state tracking */
 let dashboardMode = false;
@@ -136,10 +144,105 @@ export const channelData: {
 export const channelMap = CHANNEL_MAP;
 
 /**
+ * Build a synthetic AppConfig + activeDataloggers entries for mock mode.
+ * Channels still get auto-detected on first frame, so we only seed the dataloggers themselves.
+ */
+/**
+ * Derive mock channel definitions from a real (or hand-edited) AppConfig.
+ * Uses each configured thermocouple's channel number; temperatures are synthesized.
+ */
+function mocksFromConfig(dataloggers: DataloggerConfig[]): MockDatalogger[] {
+  return dataloggers.map((dl) => ({
+    id: dl.id,
+    name: dl.name,
+    channels: dl.thermocouples.map((tc, i) => ({
+      channel: tc.channel,
+      baseTempC: 20 + (i % 6) * 12, // spread 20..80°C across channels
+      driftC: 0.5 + (i % 4) * 0.3,
+      label: tc.name,
+      type: tc.type,
+    })),
+  }));
+}
+
+function bootstrapMockConfig(mocks: MockDatalogger[]): AppConfig {
+  const mockConfig: AppConfig = {
+    dataloggers: mocks.map((m) => ({
+      id: m.id,
+      name: m.name,
+      serial: { path: `mock://${m.id}` },
+      // Plumb labels through as configured thermocouples so processValidMessage
+      // picks the user-provided name instead of the auto-generated D<n>-T<n>.
+      thermocouples: m.channels
+        .filter((c) => c.label)
+        .map((c) => ({
+          name: c.label!,
+          type: c.type ?? "K",
+          channel: c.channel,
+        })),
+      autoDetected: true,
+    })),
+  };
+  config = mockConfig;
+  activeDataloggers = mockConfig.dataloggers;
+  return mockConfig;
+}
+
+/**
  * Initialize the application with multi-datalogger support
  * Connects to all active dataloggers in parallel
  */
 async function initializeApp() {
+  if (isMockMode) {
+    // Prefer config.json so labels + TB settings come from the same source as the real path.
+    const loadedConfig = loadConfig();
+    let mocks: MockDatalogger[];
+    if (loadedConfig) {
+      config = loadedConfig;
+      activeDataloggers = getAllDataloggers();
+      mocks = mocksFromConfig(activeDataloggers);
+      setupLog(
+        `${pc.magenta("[mock]")} using config.json: ${pc.green(
+          activeDataloggers.length,
+        )} datalogger(s)`,
+      );
+    } else {
+      mocks = defaultMockDataloggers();
+      bootstrapMockConfig(mocks);
+      setupLog(
+        `${pc.magenta("[mock]")} no config.json — using defaults (${pc.green(
+          mocks.length,
+        )} dataloggers, ${pc.green(
+          mocks.reduce((n, d) => n + d.channels.length, 0),
+        )} channels)`,
+      );
+    }
+
+    tbSink = tbSinkFromConfig(config.thingsboard);
+
+    // Register stub port entries so processValidMessage can resolve the datalogger.
+    for (const dl of activeDataloggers) {
+      dataloggerPorts.set(dl.id, {
+        port: null as unknown as SerialPort,
+        buffer: "",
+        config: dl,
+      });
+    }
+
+    startMock({
+      dataloggers: mocks,
+      intervalMs: parseInt(process.env.MOCK_INTERVAL_MS || "1000", 10),
+      onMessage: (msg, dataloggerID) => {
+        if (msg.valid) processValidMessage(msg, dataloggerID);
+      },
+    });
+
+    if (isServerMode) {
+      import("./server");
+    }
+    return;
+  }
+
   try {
     // Load configuration (read-only)
     const loadedConfig = loadConfig();
@@ -148,7 +251,8 @@ async function initializeApp() {
       // Use existing config
       config = loadedConfig;
       activeDataloggers = getAllDataloggers();
-      
+      tbSink = tbSinkFromConfig(config.thingsboard);
+
       setupLog(
         `Loaded config with ${pc.green(
           config.dataloggers.length
@@ -187,12 +291,13 @@ async function initializeApp() {
       // No config available - run auto-detection
       try {
         config = await autoDetectAndCreateConfig();
-        
+
         // Save the auto-detected config for future runs
         writeFileSync("./config.json", JSON.stringify(config, null, 2));
         setupLog(`Auto-detected config saved to ${pc.cyan('./config.json')}`);
-        
+
         activeDataloggers = getAllDataloggers();
+        tbSink = tbSinkFromConfig(config.thingsboard);
         setupLog(
           `Auto-detected ${pc.green(activeDataloggers.length)} datalogger(s)`
         );
@@ -448,6 +553,21 @@ function processValidMessage(
   // Update previous temperature tracker
   previousTemperatures[channelKey] = temperature;
 
+  // Push to ThingsBoard Gateway API (one TB device per thermocouple)
+  if (tbSink && temperature !== 0) {
+    const cfg = channelData[channelKey].config;
+    tbSink.ensureDevice(cfg.name, {
+      thermocoupleType: cfg.type,
+      channel: cfg.channel,
+      datalogger: channelData[channelKey].dataloggerName,
+      dataloggerID: channelData[channelKey].dataloggerID,
+    });
+    tbSink.enqueueTelemetry(cfg.name, {
+      ts: channelData[channelKey].lastUpdate.getTime(),
+      values: { temperature },
+    });
+  }
+
   // No individual temperature logging - data is shown in tables only
 
   // Trigger immediate dashboard update only when temperature changes
@@ -609,6 +729,20 @@ initializeApp().catch((error) => {
   console.error("Failed to initialize application:", error);
   process.exit(1);
 });
+
+// Flush TB sink on shutdown so buffered telemetry isn't dropped
+async function shutdown() {
+  if (tbSink) {
+    try {
+      await tbSink.close();
+    } catch (err: any) {
+      console.error("TB sink close error:", err?.message ?? err);
+    }
+  }
+  process.exit(0);
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 // Server startup messages will be shown after successful datalogger connection
 

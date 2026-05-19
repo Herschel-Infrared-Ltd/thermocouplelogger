@@ -56,6 +56,24 @@ export interface DataloggerConfig {
 }
 
 /**
+ * ThingsBoard Gateway MQTT sink settings.
+ */
+export interface ThingsBoardConfig {
+  /** Enable the TB sink. Default false. */
+  enabled?: boolean;
+  /** MQTT host, e.g. "iot.hi-infrastructure.net". */
+  host?: string;
+  /** MQTT port. Default 1883. */
+  port?: number;
+  /** Gateway device access token (MQTT username). */
+  accessToken?: string;
+  /** Device profile name applied to auto-created channel devices. Default "Thermocouple". */
+  deviceProfile?: string;
+  /** Telemetry batch flush interval in ms. Default 2000. */
+  flushIntervalMs?: number;
+}
+
+/**
  * Main application configuration interface (supports multiple dataloggers)
  */
 export interface AppConfig {
@@ -68,6 +86,8 @@ export interface AppConfig {
     /** Default thermocouple type for auto-detected channels */
     defaultThermocoupleType?: string;
   };
+  /** ThingsBoard Gateway MQTT sink settings. */
+  thingsboard?: ThingsBoardConfig;
 }
 
 
@@ -574,11 +594,43 @@ function validateDataloggerConfig(datalogger: any): void {
  * @param config - The configuration object to validate
  * @throws {Error} If the configuration is invalid
  */
+function validateThingsBoardConfig(tb: any): void {
+  if (typeof tb !== "object" || tb === null) {
+    throw new Error(`Invalid thingsboard block: ${JSON.stringify(tb)}`);
+  }
+  const checks: Array<[string, string]> = [
+    ["host", "string"],
+    ["accessToken", "string"],
+    ["deviceProfile", "string"],
+  ];
+  for (const [k, t] of checks) {
+    if (tb[k] !== undefined && typeof tb[k] !== t) {
+      throw new Error(`thingsboard.${k} must be a ${t}`);
+    }
+  }
+  if (tb.port !== undefined && typeof tb.port !== "number") {
+    throw new Error("thingsboard.port must be a number");
+  }
+  if (tb.flushIntervalMs !== undefined && typeof tb.flushIntervalMs !== "number") {
+    throw new Error("thingsboard.flushIntervalMs must be a number");
+  }
+  if (tb.enabled !== undefined && typeof tb.enabled !== "boolean") {
+    throw new Error("thingsboard.enabled must be a boolean");
+  }
+  if (tb.enabled === true && !tb.accessToken) {
+    throw new Error("thingsboard.enabled=true requires thingsboard.accessToken");
+  }
+}
+
 function validateConfig(config: any): asserts config is AppConfig {
   if (!config || !Array.isArray(config.dataloggers)) {
     throw new Error("Config must have a 'dataloggers' array");
   }
-  
+
+  if (config.thingsboard !== undefined) {
+    validateThingsBoardConfig(config.thingsboard);
+  }
+
   if (config.dataloggers.length === 0) {
     throw new Error("Config must have at least one datalogger");
   }

@@ -12,7 +12,9 @@
     "setup": "tsx config.ts",
     "start": "tsx index.ts",
     "server": "tsx index.ts",
-    "cli": "cross-env CLI_ONLY=true tsx index.ts"
+    "cli": "cross-env CLI_ONLY=true tsx index.ts",
+    "mock": "cross-env MOCK=true tsx index.ts",
+    "mock:tb-dry": "cross-env MOCK=true TB_ENABLE=true TB_DRY_RUN=true tsx index.ts"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -21,6 +23,7 @@
     "@hono/node-server": "^1.14.4",
     "cli-table3": "^0.6.5",
     "hono": "^4.7.11",
+    "mqtt": "^5.15.1",
     "picocolors": "^1.1.1",
     "prom-client": "^15.1.3",
     "serialport": "^13.0.0"

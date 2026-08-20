@@ -92,6 +92,29 @@ Example configuration:
 }
 ```
 
+### ThingsBoard sink
+
+Optional `thingsboard` block in `config.json` publishes telemetry over the ThingsBoard Gateway MQTT API:
+
+```json
+{
+  "thingsboard": {
+    "enabled": true,
+    "host": "iot.hi-infrastructure.net",
+    "port": 1883,
+    "accessToken": "GATEWAY_TOKEN",
+    "deviceProfile": "Thermocouple",
+    "flushIntervalMs": 2000,
+    "offlineExitMinutes": 15,
+    "offlineBufferPerDevice": 300
+  }
+}
+```
+
+- `offlineExitMinutes` (default 15, `0` disables): a watchdog exits with code 1 after this long without an MQTT connection so systemd (`Restart=always`) starts a fresh process. The watchdog also forces a reconnect when the link is up but QoS 1 pubacks stop arriving for 3 minutes, and gives up (exits) after 3 consecutive failed forced reconnects.
+- `offlineBufferPerDevice` (default 300): while disconnected, readings are held in a bounded in-process buffer instead of the unbounded mqtt.js outgoing queue; the oldest are dropped past this cap. On reconnect the backlog is flushed in chunks of at most 500 readings per publish.
+- Connection error/close/reconnect logs are rate-limited to one line per 5 minutes with a repeat count.
+
 ## Usage
 
 ### Start the complete application

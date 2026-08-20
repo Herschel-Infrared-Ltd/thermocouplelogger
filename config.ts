@@ -71,6 +71,16 @@ export interface ThingsBoardConfig {
   deviceProfile?: string;
   /** Telemetry batch flush interval in ms. Default 2000. */
   flushIntervalMs?: number;
+  /**
+   * Watchdog: exit the process (systemd restarts it) after this many minutes
+   * with no MQTT connection. Default 15. Set to 0 to disable.
+   */
+  offlineExitMinutes?: number;
+  /**
+   * Max telemetry readings retained per device while offline; oldest are
+   * dropped beyond this. Default 300.
+   */
+  offlineBufferPerDevice?: number;
 }
 
 /**

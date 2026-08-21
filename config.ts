@@ -72,6 +72,11 @@ export interface ThingsBoardConfig {
   /** Telemetry batch flush interval in ms. Default 2000. */
   flushIntervalMs?: number;
   /**
+   * Aggregation window in ms; readings are averaged to one point per device
+   * per window. 0 sends every raw reading. Default 60000 (once a minute).
+   */
+  downsampleMs?: number;
+  /**
    * Watchdog: exit the process (systemd restarts it) after this many minutes
    * with no MQTT connection. Default 15. Set to 0 to disable.
    */
@@ -623,6 +628,9 @@ function validateThingsBoardConfig(tb: any): void {
   }
   if (tb.flushIntervalMs !== undefined && typeof tb.flushIntervalMs !== "number") {
     throw new Error("thingsboard.flushIntervalMs must be a number");
+  }
+  if (tb.downsampleMs !== undefined && typeof tb.downsampleMs !== "number") {
+    throw new Error("thingsboard.downsampleMs must be a number");
   }
   if (tb.enabled !== undefined && typeof tb.enabled !== "boolean") {
     throw new Error("thingsboard.enabled must be a boolean");

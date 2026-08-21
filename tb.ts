@@ -13,6 +13,11 @@ export interface TbSinkOptions {
   /** Batch flush interval in ms. */
   flushIntervalMs: number;
   /**
+   * Aggregation window in ms; readings within a window are averaged into a
+   * single point per device. 0 publishes every raw reading. Default 60s.
+   */
+  downsampleMs?: number;
+  /**
    * Exit the process (for systemd to restart) after this long without a
    * connection. 0 disables. Default 15 minutes.
    */
@@ -45,9 +50,18 @@ const MAX_READINGS_PER_PUBLISH = 500;
 /** Minimum gap between repeated error/close/reconnect log lines. */
 const LOG_THROTTLE_MS = 5 * 60_000;
 
+interface WindowAgg {
+  sums: Record<string, number>;
+  counts: Record<string, number>;
+  last: Record<string, number | string | boolean>;
+  lastTs: number;
+}
+
 export function createTbSink(opts: TbSinkOptions): TbSink {
   const connected = new Set<string>();
-  const buffer = new Map<string, ChannelReading[]>();
+  // device -> window start ts -> running aggregate
+  const buffer = new Map<string, Map<number, WindowAgg>>();
+  const downsampleMs = opts.downsampleMs ?? 60_000;
   let client: MqttClient | null = null;
 
   const url = `mqtt://${opts.host}:${opts.port}`;
@@ -98,7 +112,7 @@ export function createTbSink(opts: TbSinkOptions): TbSink {
       console.log(pc.green(`[tb] connected to ${url}`));
       if (announcedOffline) {
         let pending = 0;
-        for (const readings of buffer.values()) pending += readings.length;
+        for (const windows of buffer.values()) pending += windows.size;
         console.log(pc.green(`[tb] reconnected, flushing ${pending} buffered readings`));
         announcedOffline = false;
       }
@@ -153,13 +167,22 @@ export function createTbSink(opts: TbSinkOptions): TbSink {
     });
   }
 
-  /** Trim each device's buffer to the offline cap, dropping oldest. */
+  /** Trim each device's buffer to the offline cap, dropping oldest windows. */
   function capBuffer(): void {
-    for (const [device, readings] of buffer) {
-      if (readings.length > offlineBufferPerDevice) {
-        buffer.set(device, readings.slice(readings.length - offlineBufferPerDevice));
+    for (const windows of buffer.values()) {
+      while (windows.size > offlineBufferPerDevice) {
+        windows.delete(windows.keys().next().value!);
       }
     }
+  }
+
+  /** Collapse a window's aggregate into one reading (numeric keys averaged). */
+  function windowReading(agg: WindowAgg): ChannelReading {
+    const values: Record<string, number | string | boolean> = { ...agg.last };
+    for (const [key, sum] of Object.entries(agg.sums)) {
+      values[key] = sum / agg.counts[key]!;
+    }
+    return { ts: agg.lastTs, values };
   }
 
   const sink: TbSink = {
@@ -173,44 +196,27 @@ export function createTbSink(opts: TbSinkOptions): TbSink {
     },
 
     enqueueTelemetry(deviceName, reading) {
-      if (!buffer.has(deviceName)) buffer.set(deviceName, []);
-      buffer.get(deviceName)!.push(reading);
+      if (!buffer.has(deviceName)) buffer.set(deviceName, new Map());
+      const windows = buffer.get(deviceName)!;
+      const win = downsampleMs > 0 ? Math.floor(reading.ts / downsampleMs) * downsampleMs : reading.ts;
+      let agg = windows.get(win);
+      if (!agg) {
+        agg = { sums: {}, counts: {}, last: {}, lastTs: reading.ts };
+        windows.set(win, agg);
+      }
+      agg.lastTs = Math.max(agg.lastTs, reading.ts);
+      for (const [key, value] of Object.entries(reading.values)) {
+        if (typeof value === "number" && Number.isFinite(value)) {
+          agg.sums[key] = (agg.sums[key] ?? 0) + value;
+          agg.counts[key] = (agg.counts[key] ?? 0) + 1;
+        } else {
+          agg.last[key] = value;
+        }
+      }
     },
 
     async flush() {
-      if (buffer.size === 0) return;
-
-      // Offline: hold readings in our own bounded buffer rather than letting
-      // mqtt.js queue them without limit.
-      if (!opts.dryRun && !connectedNow) {
-        capBuffer();
-        if (!announcedOffline) {
-          announcedOffline = true;
-          console.log(
-            pc.yellow(`[tb] offline, buffering (max ${offlineBufferPerDevice}/device)`),
-          );
-        }
-        return;
-      }
-
-      // Drain in chunks so a long offline backlog doesn't exceed TB payload limits.
-      let payload: Record<string, ChannelReading[]> = {};
-      let count = 0;
-      const send = () => {
-        if (count > 0) publish("v1/gateway/telemetry", payload);
-        payload = {};
-        count = 0;
-      };
-      for (const [device, readings] of buffer) {
-        for (const reading of readings) {
-          if (!payload[device]) payload[device] = [];
-          payload[device]!.push(reading);
-          count += 1;
-          if (count >= MAX_READINGS_PER_PUBLISH) send();
-        }
-      }
-      send();
-      buffer.clear();
+      return flushWindows(true);
     },
 
     async close() {
@@ -222,6 +228,47 @@ export function createTbSink(opts: TbSinkOptions): TbSink {
       }
     },
   };
+
+  // Publishes completed windows; force also emits still-open ones (shutdown).
+  // Runs on the flush timer, so a window lands shortly after it closes.
+  async function flushWindows(force: boolean): Promise<void> {
+    if (buffer.size === 0) return;
+
+    // Offline: hold readings in our own bounded buffer rather than letting
+    // mqtt.js queue them without limit.
+    if (!opts.dryRun && !connectedNow) {
+      capBuffer();
+      if (!announcedOffline) {
+        announcedOffline = true;
+        console.log(
+          pc.yellow(`[tb] offline, buffering (max ${offlineBufferPerDevice}/device)`),
+        );
+      }
+      return;
+    }
+
+    const now = Date.now();
+    // Drain in chunks so a long offline backlog doesn't exceed TB payload limits.
+    let payload: Record<string, ChannelReading[]> = {};
+    let count = 0;
+    const send = () => {
+      if (count > 0) publish("v1/gateway/telemetry", payload);
+      payload = {};
+      count = 0;
+    };
+    for (const [device, windows] of buffer) {
+      for (const [win, agg] of windows) {
+        if (!force && downsampleMs > 0 && win + downsampleMs > now) continue;
+        if (!payload[device]) payload[device] = [];
+        payload[device]!.push(windowReading(agg));
+        windows.delete(win);
+        count += 1;
+        if (count >= MAX_READINGS_PER_PUBLISH) send();
+      }
+      if (windows.size === 0) buffer.delete(device);
+    }
+    send();
+  }
 
   function forceReconnect(reason: string): void {
     forcedReconnects += 1;
@@ -272,7 +319,7 @@ export function createTbSink(opts: TbSinkOptions): TbSink {
   watchdog.unref?.();
 
   const timer = setInterval(() => {
-    sink.flush().catch((err) =>
+    flushWindows(false).catch((err) =>
       console.error(pc.red(`[tb] flush error: ${err.message}`)),
     );
   }, opts.flushIntervalMs);
@@ -295,6 +342,7 @@ export function tbSinkFromConfig(tb?: ThingsBoardConfig): TbSink | null {
   const port = tb.port ?? 1883;
   const deviceProfile = tb.deviceProfile || "Thermocouple";
   const flushIntervalMs = tb.flushIntervalMs ?? 2000;
+  const downsampleMs = tb.downsampleMs ?? 60_000;
   const offlineExitMinutes = tb.offlineExitMinutes ?? 15;
   const offlineBufferPerDevice = tb.offlineBufferPerDevice ?? 300;
   const dryRun = process.env.TB_DRY_RUN === "true";
@@ -304,6 +352,7 @@ export function tbSinkFromConfig(tb?: ThingsBoardConfig): TbSink | null {
     token: tb.accessToken,
     deviceProfile,
     flushIntervalMs,
+    downsampleMs,
     offlineExitMs: Math.round(offlineExitMinutes * 60_000),
     offlineBufferPerDevice,
     dryRun,

@@ -5,7 +5,7 @@
 		<meta charset="UTF-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
 		<title>Thermocouple Dashboard</title>
-		<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+		<link rel="stylesheet" href="/styles.css">
 		<style>
 			/* Typography optimizations */
 			* {
@@ -96,8 +96,8 @@
 					<h2 class="text-large text-gray-800 mb-4">Live Temperatures</h2>
 					<div id="status-indicator"
 						class="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 text-small text-gray-600">
-						<span class="loading-pulse inline-block w-2 h-2 bg-black rounded-full"></span>
-						<span>Loading data...</span>
+						<span id="status-dot" class="loading-pulse inline-block w-2 h-2 bg-black rounded-full"></span>
+						<span id="status-text">Loading data...</span>
 					</div>
 					<div id="datalogger-summary" class="mt-4 text-small text-gray-600">
 						<span id="datalogger-count"></span> • <span id="channel-count"></span> • <span id="connected-count"></span>
@@ -123,7 +123,6 @@
 
 		<script>
 			const grid = document.getElementById('thermocouple-grid');
-			const statusIndicator = document.getElementById('status-indicator');
 			const errorMessageDiv = document.getElementById('error-message');
 			const errorTextSpan = document.getElementById('error-text');
 			const dataloggerCount = document.getElementById('datalogger-count');
@@ -193,17 +192,12 @@
 				card.querySelector('.channel-status').textContent = statusText;
 			}
 
-			function updateStatusIndicator(message, type = 'loading') {
-				const indicators = {
-					loading: '<span class="loading-pulse inline-block w-2 h-2 bg-black rounded-full"></span>',
-					success: '<span class="inline-block w-2 h-2 bg-black rounded-full"></span>',
-					error: '<span class="inline-block w-2 h-2 bg-black rounded-full"></span>'
-				};
+			const statusDot = document.getElementById('status-dot');
+			const statusText = document.getElementById('status-text');
 
-				statusIndicator.innerHTML = `
-					${indicators[type]}
-					<span>${message}</span>
-				`;
+			function updateStatusIndicator(message, type = 'loading') {
+				statusDot.classList.toggle('loading-pulse', type === 'loading');
+				statusText.textContent = message;
 			}
 
 			async function fetchTemperatures() {

@@ -33,7 +33,8 @@ thermocouplelogger/
 ├── logger.ts            # Enhanced logging with dashboard mode
 ├── parser.ts            # Shared data parsing and validation
 ├── public/
-│   └── index.html       # Web dashboard interface
+│   ├── index.html       # Web dashboard interface
+│   └── styles.css       # Prebuilt Tailwind CSS for index.html
 └── config.json          # Runtime configuration (auto-generated)
 ```
 
@@ -158,6 +159,8 @@ The web dashboard displays:
 - Connection status for each thermocouple
 - Last update timestamps and detection metadata
 - Visual indicators for connected/disconnected channels
+
+`public/styles.css` is generated from the classes in `public/index.html`. After changing classes, regenerate it with Tailwind v4 (`@import "tailwindcss" source(none); @source "./public/index.html";` as input, `npx @tailwindcss/cli -i <input> -o public/styles.css --minify`).
 
 ## API Endpoints
 

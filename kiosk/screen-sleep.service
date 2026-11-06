@@ -1,0 +1,12 @@
+[Unit]
+Description=Blank the screen after 2 minutes without touch; tap to wake
+StartLimitIntervalSec=0
+
+[Service]
+Environment=SCREEN_SLEEP_SECONDS=120
+ExecStart=/usr/bin/python3 %h/.local/bin/screen-sleep
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

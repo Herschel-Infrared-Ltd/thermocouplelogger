@@ -1,0 +1,6 @@
+[Unit]
+Description=Nightly restart of the thermocouple dashboard kiosk
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --user restart thermocouple-kiosk.service

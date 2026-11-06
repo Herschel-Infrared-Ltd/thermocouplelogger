@@ -34,7 +34,9 @@ thermocouplelogger/
 ├── parser.ts            # Shared data parsing and validation
 ├── public/
 │   ├── index.html       # Web dashboard interface
-│   └── styles.css       # Prebuilt Tailwind CSS for index.html
+│   ├── styles.css       # Prebuilt Tailwind CSS for index.html
+│   └── fonts/           # Fustat and Plus Jakarta Sans (latin subset)
+├── kiosk/               # Full-screen dashboard and screen sleep for a Raspberry Pi touchscreen
 └── config.json          # Runtime configuration (auto-generated)
 ```
 
@@ -161,6 +163,30 @@ The web dashboard displays:
 - Visual indicators for connected/disconnected channels
 
 `public/styles.css` is generated from the classes in `public/index.html`. After changing classes, regenerate it with Tailwind v4 (`@import "tailwindcss" source(none); @source "./public/index.html";` as input, `npx @tailwindcss/cli -i <input> -o public/styles.css --minify`).
+
+## Kiosk
+
+`kiosk/` runs the web dashboard full screen on a Raspberry Pi touchscreen under the default Wayland desktop (labwc), as systemd user services for the desktop user:
+
+- `thermocouple-kiosk.service` starts Chromium in kiosk mode on `http://localhost:3000/` once the compositor and the dashboard are up. A timer restarts it every night at 04:00.
+- `screen-sleep.service` turns the backlight off after 2 minutes without touch (`SCREEN_SLEEP_SECONDS`). The next touch turns it back on and is not passed to the page.
+
+Install or update, as the desktop user (needs the `video` and `input` groups):
+
+```bash
+kiosk/install.sh
+```
+
+To redeploy the logger and the dashboard from `main`:
+
+```bash
+git pull --ff-only
+npm ci
+sudo systemctl restart thermocouplelogger
+kiosk/install.sh
+```
+
+To stop screen sleep: `systemctl --user disable --now screen-sleep.service`.
 
 ## API Endpoints
 

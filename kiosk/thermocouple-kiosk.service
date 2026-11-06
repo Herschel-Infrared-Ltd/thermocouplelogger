@@ -1,0 +1,13 @@
+[Unit]
+Description=Thermocouple dashboard kiosk (Chromium)
+StartLimitIntervalSec=0
+
+[Service]
+Environment=WAYLAND_DISPLAY=wayland-0
+ExecStart=%h/.local/bin/thermocouple-kiosk
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
